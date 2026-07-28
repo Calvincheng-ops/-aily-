@@ -1,0 +1,54 @@
+flowchart TD
+    U["用户回复文件消息并 @机器人发送归档"] --> A0["技能 A / A0：读取 chat_id、触发 message_id、发起人"]
+    A0 --> A1{"群聊、@机器人和归档指令是否有效"}
+    A1 -->|否| AE1["提示正确使用方式并结束"]
+    A1 -->|是| A2["按 trigger_message_id 查询当前触发消息"]
+    A2 --> P{"parent_id 是否存在"}
+    P -->|否| AE2["提示必须回复文件消息"]
+    P -->|是| A3["A3：按 parent_id 查询被回复消息"]
+    A3 --> F{"被回复消息是否为有效 file"}
+    F -->|否| AE3["提示被回复内容不是可归档文件"]
+    F -->|是| A4["A4：标准化被回复文件信息"]
+    A4 --> A5["A5：按 chat_id 精确查询唯一启用映射"]
+    A5 --> A6["A6：校验文件和映射"]
+    A6 --> A7["A7：生成单文件请求快照"]
+    A7 --> V{"校验是否成功"}
+    V -->|否| AE4["发送真实 error 并结束"]
+    V -->|是| A8["A8：创建请求 selecting_file，selected_file 为空"]
+    A8 --> A9["A9：组装单文件确认卡片变量"]
+    A9 --> C1["卡片 1：确认归档这个文件"]
+
+    C1 --> B0["技能 B 新运行：读取开始节点全局参数"]
+    B0 --> B1["按 request_id 恢复完整归档请求"]
+    B1 --> B2["校验操作者、状态、有效期和根目录边界"]
+    B2 --> R{"action"}
+
+    R -->|choose_file| CF["从候选快照保存真实文件，状态改为 selecting_folder"]
+    CF --> L1["读取根目录直属子文件夹并保存白名单"]
+    L1 --> BC2["技能 B：校验目录并组装卡片 2 变量"]
+    BC2 --> C2["卡片 2：浏览目录或使用当前目录"]
+
+    C2 --> B0
+    R -->|browse| BR["只进入 allowed_child_folders_json 中的目录"]
+    R -->|back| BK["从 folder_path_json 返回上级，不越过根目录"]
+    BR --> L2["读取新当前目录直属子文件夹并更新白名单"]
+    BK --> L2
+    L2 --> C2
+
+    R -->|choose_current_folder| TF["保存 target_folder，状态改为 waiting_confirm"]
+    TF --> BC3["技能 B：组装最终确认卡片变量"]
+    BC3 --> C3["卡片 3：最终确认，尚未上传"]
+    C3 --> B0
+    R -->|return_folder| RF["恢复 selecting_folder 并清空 target_folder"]
+    RF --> C2
+    R -->|cancel| CA["写入 cancelled 并结束"]
+    R -->|confirm_upload| P0["条件抢占 waiting_confirm → processing"]
+    P0 --> P1["从请求表读取消息 ID、file_key 和目标目录"]
+    P1 --> P2["下载文件并按真实字节数复查大小"]
+    P2 --> P3["上传到 target_folder_token"]
+    P3 --> P4{"上传结果"}
+    P4 -->|成功| PS["写入 success、文件链接和完成时间"]
+    P4 -->|失败| PF["写入 failed、真实错误和完成时间"]
+    PS --> BC4["技能 B：组装归档结果卡片变量"]
+    PF --> BC4
+    BC4 --> C4["卡片 4：归档结果"]
