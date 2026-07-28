@@ -20,12 +20,13 @@ def _make_skill_object(
     request_id: str,
     action: str,
     selected_file_id: str = "",
-    update_card: bool = False,
+    update_card: bool = True,
+    success_message: str = "",
 ) -> Dict[str, Any]:
     skill_input = {"request_id": request_id, "action": action}
     if selected_file_id:
         skill_input["selected_file_id"] = selected_file_id
-    return {
+    result = {
         "x_aily_forbid_forward_callback": True,
         "aily_action": "trigger_skill",
         "skill_id": callback_skill_id,
@@ -36,6 +37,9 @@ def _make_skill_object(
         ),
         "update_card": update_card,
     }
+    if update_card and success_message:
+        result["success_message"] = success_message
+    return result
 
 
 def _result(error: str = "", error_code: str = "") -> Dict[str, Any]:
@@ -113,11 +117,13 @@ def main(
             request_id,
             "choose_file",
             selected_file_id=file_id,
+            success_message="已确认文件，正在加载归档目录…",
         ),
         "skill_object_cancel": _make_skill_object(
             callback_skill_id,
             request_id,
             "cancel",
             update_card=True,
+            success_message="已取消本次归档",
         ),
     }

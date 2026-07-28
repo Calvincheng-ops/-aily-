@@ -18,7 +18,7 @@ flowchart TD
     A8 --> A9["A9：组装单文件确认卡片变量"]
     A9 --> C1["卡片 1：确认归档这个文件"]
 
-    C1 --> B0["技能 B 新运行：读取开始节点全局参数"]
+    C1 --> B0["技能 B 新运行：读取系统全局变量和开始节点自定义参数"]
     B0 --> B1["按 request_id 恢复完整归档请求"]
     B1 --> B2["校验操作者、状态、有效期和根目录边界"]
     B2 --> R{"action"}
@@ -42,10 +42,12 @@ flowchart TD
     R -->|return_folder| RF["恢复 selecting_folder 并清空 target_folder"]
     RF --> C2
     R -->|cancel| CA["写入 cancelled 并结束"]
-    R -->|confirm_upload| P0["条件抢占 waiting_confirm → processing"]
-    P0 --> P1["从请求表读取消息 ID、file_key 和目标目录"]
-    P1 --> P2["下载文件并按真实字节数复查大小"]
-    P2 --> P3["上传到 target_folder_token"]
+    R -->|confirm_upload| P0["重查最新请求状态和结果"]
+    P0 --> DUP{"仍为 waiting_confirm 且无结果 token"}
+    DUP -->|否| E5["拒绝重复提交"]
+    DUP -->|是| P1["更新 processing 并读取消息 ID、file_key 和目标目录"]
+    P1 --> P2["下载文件并检查真实字节数在 1..20 MB"]
+    P2 --> P3["普通上传到 target_folder_token"]
     P3 --> P4{"上传结果"}
     P4 -->|成功| PS["写入 success、文件链接和完成时间"]
     P4 -->|失败| PF["写入 failed、真实错误和完成时间"]

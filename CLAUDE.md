@@ -15,7 +15,7 @@
 aily_nodes/          # aILY Python 节点的本地备份代码
   a7_build_archive_request.py      # 验证直接回复文件和映射，生成请求快照
   a9_build_file_confirm_card.py    # 组装单文件确认卡片
-  b2_validate_callback.py          # 技能 B 全局参数、状态和白名单校验
+  b2_validate_callback.py          # 技能 B 自定义参数、状态和白名单校验
   b_build_folder_card.py           # 技能 B：组装目录浏览卡片
   b_build_confirm_card.py          # 技能 B：组装最终确认卡片
   b_build_result_card.py           # 技能 B：组装归档结果卡片
@@ -28,10 +28,10 @@ tests/
 - **不再使用服务端 Python 版本**（Docker + 事件回调）。旧代码已删除，新架构完全是 aILY 工作流。
 - App Secret / token 不得写入 Base、卡片变量或代码常量。
 - 技能 A 不得读取大量群聊历史或使用智能体猜文件；只按触发消息 `parent_id` 读取用户明确回复的文件。
-- 卡片回调是一次新的技能 B 运行，只能从 B 开始节点全局参数进入，状态通过 `request_id` 从多维表格恢复。
+- 卡片回调是一次新的技能 B 运行，从系统全局变量和 B 开始节点自定义参数进入，状态通过 `request_id` 从多维表格恢复。
 - 即使只有 1 个文件，也必须先经过卡片 1 的用户确认；技能 A 不得提前写入选中文件。
 - 群聊只能访问映射表指定根目录及其子目录。
-- 上传前必须重新检查请求状态和目标目录边界（幂等控制）。
+- 上传前必须重新检查请求状态、20 MB 普通上传上限和目标目录边界；这是重复提交防护，不宣称 Base 普通更新具备原子幂等。
 - 错误分支必须展示当前节点真实 `error`，禁止把文件类型错误误报为“没有映射”。
 
 ## 关键外部资源

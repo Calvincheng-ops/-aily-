@@ -2,7 +2,7 @@
 
 > 本文是当前项目唯一有效的搭建指南，适用于从零重新搭建。
 >
-> 本版已经删除“读取大量群聊历史、让智能体猜测最终文件”的方案。技能 A 只处理用户明确回复的文件消息；技能 B 是独立技能，每次运行只能从自己的开始节点全局参数进入，并通过 `request_id` 从多维表格恢复状态。
+> 本版已经删除“读取大量群聊历史、让智能体猜测最终文件”的方案。技能 A 只处理用户明确回复的文件消息；技能 B 是独立技能，每次运行从 Aily 系统全局变量和自己开始节点的自定义参数进入，并通过 `request_id` 从多维表格恢复业务状态。
 
 ## 0. 先读结论
 
@@ -37,7 +37,7 @@
 ### 0.3 三条不可违反的规则
 
 1. **即使只有一个文件，也必须先让用户点击卡片确认。**
-2. 技能 B 不得引用技能 A 的节点变量；只能读取技能 B 开始节点全局参数和多维表格记录。
+2. 技能 B 不得引用技能 A 的节点变量；只能读取本次运行的系统全局变量、开始节点自定义参数和多维表格记录。
 3. 失败分支必须展示真实节点的 `error`，不得用一条固定文案代替所有错误。
 
 ---
@@ -124,7 +124,7 @@ flowchart TD
     A8 --> A9["A9：组装单文件确认卡片变量"]
     A9 --> C1["卡片 1：确认归档这个文件"]
 
-    C1 --> B0["技能 B 新运行：读取开始节点全局参数"]
+    C1 --> B0["技能 B 新运行：读取系统全局变量和开始节点自定义参数"]
     B0 --> B1["按 request_id 恢复归档请求"]
     B1 --> B2{"校验操作者、状态、有效期和 action"}
     B2 -->|choose_file| B3["保存确认文件并进入 selecting_folder"]
@@ -139,7 +139,7 @@ flowchart TD
     BC3 --> C3["卡片 3：最终确认"]
     C3 --> B0
     B2 -->|return_folder| C2
-    B2 -->|confirm_upload| UP["抢占 processing、下载文件、上传云盘"]
+    B2 -->|confirm_upload| UP["重查状态、防重复提交、下载文件、上传云盘"]
     UP --> BC4["技能 B：组装归档结果卡片变量"]
     BC4 --> C4["卡片 4：成功或失败结果"]
     B2 -->|cancel| BC["写入 cancelled 并结束"]
@@ -162,7 +162,7 @@ flowchart TD
 ### 阶段二：先搭技能 B 的空入口
 
 1. 新建技能 B。
-2. 在开始节点声明四个全局参数。
+2. 在开始节点声明四个自定义参数。
 3. 临时只连接一个调试输出节点，确认能显示四个参数。
 4. 发布技能 B。
 5. 记录技能 B 的 `skill_xxx`。
@@ -226,7 +226,8 @@ flowchart TD
 | `root_folder_url` | 超链接 | 是 | 根目录链接 |
 | `enabled` | 复选框 | 是 | 只有启用记录可以使用 |
 | `allowed_file_types` | 多选 | 是 | 不带点号的小写扩展名 |
-| `max_file_size_mb` | 数字 | 是 | 最大文件大小 |
+| `max_file_size_mb` | 数字 | 是 | 普通上传流程最大只能填 `20` |
+| `only_file_sender_can_archive` | 复选框 | 否 | 默认不勾选；勾选后只允许文件发送者本人发起归档 |
 | `updated_at` | 日期时间 | 否 | 管理用 |
 
 正确示例：
@@ -238,7 +239,10 @@ root_folder_name        测试文件夹
 enabled                 true
 allowed_file_types      pdf, docx, xlsx, pptx, zip, md
 max_file_size_mb        20
+only_file_sender_can_archive  false
 ```
+
+当前流程使用飞书普通上传接口，不支持空文件或超过 20 MB 的文件。需要支持更大文件时，必须另建分片上传流程，不能只把 `max_file_size_mb` 改大。
 
 扩展名规则：
 
@@ -369,7 +373,7 @@ expired
 
 ---
 
-## 5. 技能 B：先配置开始节点全局参数
+## 5. 技能 B：先配置系统全局变量与开始节点自定义参数
 
 技能名称建议：
 
@@ -377,18 +381,27 @@ expired
 处理文件归档卡片-V2
 ```
 
-### 5.1 B0 开始节点参数
+### 5.1 先区分两类变量
 
-技能 B 的开始节点声明以下全局参数：
+Aily 开始节点会同时展示两类变量：
+
+| 类型 | 由谁提供 | 本项目用途 |
+|---|---|---|
+| 系统全局变量 | Aily 自动提供 | `message.sender.openID` 用作卡片点击操作者；`query`、`session`、`channel` 用于上下文 |
+| 开始节点自定义参数 | 开发者声明，由卡片回调传入 | `request_id`、`action`、`selected_file_id`、`selected_folder_token` |
+
+不要把四个业务字段理解成“跨技能全局变量”。它们只是技能 B 本次运行的开始节点自定义参数；下一次卡片点击会启动新的技能 B 运行。
+
+### 5.2 B0 开始节点自定义参数
+
+技能 B 的开始节点声明以下自定义参数：
 
 | 参数名 | 类型 | 必填 | 默认值 | 来源 |
 |---|---|---:|---|---|
-| `request_id` | string | 是 | 空 | 按钮 `skill_input` |
-| `action` | string | 是 | 空 | 按钮 `skill_input` |
+| `request_id` | string | 是 | 空 | 回调对象的 `skill_input` |
+| `action` | string | 是 | 空 | 回调对象的 `skill_input` |
 | `selected_file_id` | string | 否 | 空 | 卡片 1 回调 |
 | `selected_folder_token` | string | 否 | 空 | 卡片 2 表单回调 |
-
-这里的“全局参数”指技能 B 本次运行的入口参数，不是跨运行持久变量。
 
 技能 B 的任何后续节点都不得直接引用：
 
@@ -400,7 +413,7 @@ A8.xxx
 上一次技能 B 的节点输出
 ```
 
-### 5.2 全局参数的传入方式
+### 5.3 自定义参数的传入方式
 
 固定参数放进按钮 `skill_input`：
 
@@ -421,12 +434,12 @@ selected_folder_token
 它必须满足：
 
 1. 卡片表单项标识是 `selected_folder_token`。
-2. 技能 B 开始节点存在同名全局参数。
-3. 卡片请求回调将表单值映射到这个全局参数。
+2. 技能 B 开始节点存在同名自定义参数。
+3. 卡片请求回调将表单值自动传给这个同名自定义参数。
 
 不能只在卡片里创建表单项，却不在技能 B 声明参数。
 
-### 5.3 B0 最小回调测试
+### 5.4 B0 最小回调测试
 
 正式搭 B 之前，先让开始节点后面只连接一个调试节点，输出：
 
@@ -465,9 +478,15 @@ selected_folder_token
 
 参数没打通之前，不继续搭业务节点。
 
-### 5.4 操作者身份
+### 5.5 操作者身份
 
-技能 B 必须从本次卡片点击的可信系统上下文中取得操作者 open_id，并与请求表中的 `requester_id` 比较。
+技能 B 必须从本次卡片点击的系统全局变量取得：
+
+```text
+operator_id = message.sender.openID
+```
+
+然后把 `operator_id` 传给 `b2_validate_callback.py`，与请求表中的 `requester_id` 比较。
 
 不要接受卡片自行提交的 `operator_open_id` 作为可信身份。卡片参数可以被重放或篡改。
 
@@ -485,7 +504,8 @@ selected_folder_token
   "aily_action": "trigger_skill",
   "skill_id": "skill_xxx",
   "skill_input": "{\"request_id\":\"archive_xxx\",\"action\":\"cancel\"}",
-  "update_card": true
+  "update_card": true,
+  "success_message": "已取消本次归档"
 }
 ```
 
@@ -493,12 +513,29 @@ selected_folder_token
 
 - `skill_id` 必须是已发布技能 B 的 `skill_xxx`。
 - 不是应用 ID、卡片模板 ID、节点 ID 或 `cli_xxx`。
-- `skill_input` 的键名必须与技能 B 开始节点全局参数一致。
-- 取消按钮建议 `update_card=true`，防止重复点击。
+- `skill_input` 必须是合法 JSON 字符串，键名必须与技能 B 开始节点自定义参数一致。
+- 表单内产生的字段不要重复塞进 `skill_input`；Aily 会按组件名称自动传入。
+- 会推进状态的按钮统一使用 `update_card=true`，并填写明确的 `success_message`。
 - “发送飞书卡片”节点底部的 HTTP 回调保持为空。
 - 本项目没有自建公网回调服务。
 
-### 6.2 可以通过卡片传什么
+### 6.2 卡片编辑器与发送节点的完整绑定步骤
+
+每张交互卡片都按以下顺序配置：
+
+1. 在卡片搭建工具中选中按钮，打开“事件”。
+2. 点击时选择“请求回调”。
+3. 参数类型选择“对象”。
+4. 回传参数选择“绑定变量”。
+5. 新建或绑定对应对象变量，例如 `skill_object_choose_file`。
+6. 发布卡片。
+7. 回到 Aily 的“发送飞书卡片”节点，把卡片对象变量绑定到代码节点同名输出。
+8. 调试代码节点，让 Aily 自动解析 `main()` 返回对象结构，再确认所有命名输出均可选。
+9. 如果之后重新编辑并发布卡片，必须回到“发送飞书卡片”节点点击“更新”，否则工作流仍可能使用旧卡片版本。
+
+卡片 2 额外要求：下拉框和触发 `browse` 的按钮必须位于同一个表单容器内，下拉组件名称必须是 `selected_folder_token`。
+
+### 6.3 可以通过卡片传什么
 
 允许：
 
@@ -526,7 +563,7 @@ requester_id
 
 这些真实状态必须通过 `request_id` 从归档请求表恢复。
 
-### 6.3 人员变量
+### 6.4 人员变量
 
 交互卡片统一创建：
 
@@ -598,6 +635,8 @@ requester_id
 - 只有一个文件也必须显示本卡片。
 - 技能 A 创建请求时不能提前填写 `selected_file_*`。
 - 只有用户点击“确认归档此文件”后，技能 B 才写入真实选中文件。
+- “确认归档此文件”和“取消”均绑定对象回调，使用 `update_card=true`。
+- 确认成功文案建议为“已确认文件，正在加载归档目录…”。
 
 ### 7.2 卡片 2：选择目录
 
@@ -632,13 +671,15 @@ requester_id
 | 选项来源 | `folder_options` |
 | 下拉必填 | 是 |
 | 提交按钮 action | `browse` |
-| 技能 B 同名全局参数 | `selected_folder_token` |
+| 技能 B 同名自定义参数 | `selected_folder_token` |
 
 卡片外部按钮：
 
 - 使用当前目录 → `choose_current_folder`
 - 返回上级 → `back`
 - 取消 → `cancel`
+
+`browse`、`back`、`choose_current_folder`、`cancel` 均使用 `update_card=true` 和对应的 `success_message`。每次点击后由技能 B 发送一张新卡片 2 或卡片 3，旧卡片不继续承担状态。
 
 空目录时：
 
@@ -666,11 +707,11 @@ requester_id
 
 按钮：
 
-| 按钮 | action |
-|---|---|
-| 确认上传 | `confirm_upload` |
-| 返回重新选择 | `return_folder` |
-| 取消 | `cancel` |
+| 按钮 | action | `update_card` | 建议成功文案 |
+|---|---|---:|---|
+| 确认上传 | `confirm_upload` | `true` | 已提交归档，正在上传文件… |
+| 返回重新选择 | `return_folder` | `true` | 正在返回目录选择… |
+| 取消 | `cancel` | `true` | 已取消本次归档 |
 
 卡片 3 不接收文件 key 或目录 token；显示和执行数据都从请求表恢复。
 
@@ -707,15 +748,15 @@ requester_id
 
 至少取得：
 
-| 标准变量 | 来源 |
-|---|---|
-| `trigger_text` | 当前用户消息文字 |
-| `chat_id` | 当前群聊 ID，必须为 `oc_...` |
-| `trigger_message_id` | 当前 @机器人消息 ID，必须为 `om_...` |
-| `requester_id` | 发起人 open_id，必须为 `ou_...` |
-| `chat_type` | 当前会话类型 |
+| 标准变量 | Aily 系统全局变量来源 | 校验 |
+|---|---|---|
+| `trigger_text` | `query` | 当前用户消息文字 |
+| `chat_id` | 优先 `session.sessionID`，也可核对 `channel.larkChannelInfo.chat_id` | 必须为 `oc_...` |
+| `trigger_message_id` | `message.channelInfo.message_id` | 必须为 `om_...` |
+| `requester_id` | `message.sender.openID` | 必须为 `ou_...` |
+| `chat_type` | `session.sessionType` | 必须为 `group` |
 
-不同 Aily 版本的字段路径可能不同。第一次调试时保存真实开始节点输出，再做字段映射，不要猜路径。
+第一次调试时打开开始节点上方“变量”，保存真实结构并核对字段大小写。若当前租户版本字段路径有差异，以调试台实际结构为准，但不要改用 `messageHistory` 猜值。
 
 不要把以下值误当成 requester open_id：
 
@@ -777,7 +818,8 @@ error: 请回复需要归档的文件消息，并 @机器人发送“归档”�
 - 被回复消息必须 `msg_type=file`。
 - 被回复消息不能已删除或撤回。
 - 被回复消息必须与触发消息属于同一个 `chat_id`。
-- 默认要求文件发送者与归档发起人相同；如果业务允许归档别人发送的文件，应另行定义权限规则。
+- 默认允许发起人归档群内其他成员发送的文件。
+- 只有映射记录 `only_file_sender_can_archive=true` 时，才要求文件发送者与归档发起人相同。
 
 如果 `parent_id` 对应的不是文件，不要继续使用 `root_id` 猜测文件；提示用户直接回复文件消息。
 
@@ -857,6 +899,7 @@ root_folder_name
 root_folder_url
 allowed_file_types
 max_file_size_mb
+only_file_sender_can_archive
 ```
 
 ### A6：校验文件
@@ -867,6 +910,7 @@ max_file_size_mb
 2. `file_name` 非空。
 3. `file_type` 在 `allowed_file_types` 中。
 4. 能取得文件大小时，不超过 `max_file_size_mb`。
+5. 当前普通上传流程要求 `max_file_size_mb` 在 `1..20`；超过 20 直接返回 `FILE_SIZE_CONFIG_UNSUPPORTED`。
 
 类型不允许时必须输出：
 
@@ -877,7 +921,7 @@ error: 当前文件类型 .md 不在本群允许归档的类型中
 
 不要输出“没有找到目录映射”。
 
-如果消息查询不能提供文件大小，允许先继续，但在实际下载后必须重新校验真实字节数。
+如果消息查询不能提供文件大小，允许先继续，但在实际下载后必须重新校验真实字节数；空文件或超过 20 MB 的文件停止上传。
 
 ### A7：生成请求快照
 
@@ -1187,13 +1231,13 @@ completed_at = 当前时间
 
 1. 再次查询最新请求。
 2. 确认状态仍为 `waiting_confirm`。
-3. 以条件更新方式抢占：
+3. 将状态更新为：
 
 ```text
 waiting_confirm → processing
 ```
 
-4. 如果抢占失败，说明已被处理，停止上传。
+4. 立即再次读取请求；如果已经是终态、存在 `result_file_token`，或状态不是本次预期，停止上传。
 5. 从请求记录读取：
 
 ```text
@@ -1206,7 +1250,7 @@ request_id
 ```
 
 6. 下载消息附件。
-7. 按真实下载字节数再次检查大小。
+7. 按真实下载字节数再次检查：必须大于 0，且不超过映射限制和普通上传接口的 20 MB 上限。
 8. 上传到 `target_folder_token`。
 9. 成功写入：
 
@@ -1229,6 +1273,8 @@ completed_at
 11. 发送卡片 4。
 
 卡片 4 变量组装代码：[`aily_nodes/b_build_result_card.py`](./aily_nodes/b_build_result_card.py)。
+
+这里实现的是“状态校验 + 卡片更新 + 重复点击防护”，不是严格的原子幂等。普通 Base 查询后更新不能被文档描述成已经具备 CAS 抢占；飞书普通上传接口也没有 `request_id` 幂等参数。若业务要求并发条件下绝不产生重复文件，需要另接支持原子条件写或幂等键的服务。
 
 ---
 
@@ -1264,15 +1310,50 @@ item.parent_token == 本次输入的 current_folder_token
 | 文件名 | 请求表 `selected_file_name` |
 | 目标目录 | 请求表 `target_folder_token` |
 | 文件内容 | 下载节点输出 |
-| 幂等键 | `request_id` |
+| 文件大小 | 下载后的真实字节数，范围 `1..20 MB` |
 
 不得使用卡片展示文本作为上传输入。
+`request_id` 只用于恢复业务状态和排查日志，不是飞书上传接口参数。
 
 ---
 
-## 12. 错误处理规范
+## 12. 权限、身份与平台限制
 
-### 12.1 错误对象
+正式联调前逐项确认：
+
+### 12.1 群消息权限
+
+- 机器人能力已启用并发布。
+- 机器人已经加入触发归档的群。
+- 应用已经开通读取消息所需权限；使用应用身份读取群消息时，必须包含群消息读取权限。
+- “获取指定消息”节点能用 `message.channelInfo.message_id` 查到触发消息。
+- 下载资源时，`source_message_id` 与 `selected_file_key` 必须来自同一条文件消息。
+
+### 12.2 云盘权限
+
+- 先明确“目录清单”和“上传文件”节点使用的是应用身份还是用户身份。
+- 根目录必须授权给实际调用身份；只把目录链接写进多维表格不会自动授予权限。
+- 调用身份必须对根目录及其子目录具有读取清单和上传文件权限。
+- 权限错误、目录不存在、目录映射不存在必须使用不同错误码，不得统一显示“没有目录映射”。
+
+### 12.3 多维表格权限
+
+- 技能 A 能读取“群目录映射”表并创建“归档请求”记录。
+- 技能 B 能按 `request_id` 查询和更新“归档请求”记录。
+- App Token、Table ID、View ID 使用正确，且调用身份对两张表具有相应权限。
+
+### 12.4 文件大小与接口限制
+
+- 获取消息资源文件的上限高于本项目普通上传上限，但最终瓶颈是普通上传的 20 MB。
+- `max_file_size_mb` 只能配置为 `1..20`。
+- 下载后再次以真实字节数校验，空文件和超过 20 MB 的文件停止上传。
+- 要支持大于 20 MB 的文件，必须另建分片上传流程并单独测试。
+
+---
+
+## 13. 错误处理规范
+
+### 13.1 错误对象
 
 关键校验节点统一输出：
 
@@ -1294,7 +1375,7 @@ item.parent_token == 本次输入的 current_folder_token
 }
 ```
 
-### 12.2 分支配置
+### 13.2 分支配置
 
 每个关键节点后统一：
 
@@ -1309,7 +1390,7 @@ if ok == false → 发送该节点 error → 结束
 - 忽略代码节点真实 `error`。
 - 用空的 `chat_id/root_folder_name` 推断映射没找到。
 
-### 12.3 推荐错误码
+### 13.3 推荐错误码
 
 ```text
 INVALID_TRIGGER
@@ -1327,6 +1408,8 @@ ROOT_FOLDER_NAME_MISSING
 ROOT_FOLDER_URL_MISSING
 FILE_TYPE_CONFIG_EMPTY
 FILE_TYPE_NOT_ALLOWED
+FILE_SIZE_CONFIG_INVALID
+FILE_SIZE_CONFIG_UNSUPPORTED
 FILE_TOO_LARGE
 CALLBACK_SKILL_ID_MISSING
 CALLBACK_SKILL_ID_INVALID
@@ -1342,11 +1425,13 @@ FOLDER_OUT_OF_BOUNDARY
 FOLDER_PARENT_MISSING
 DOWNLOAD_FAILED
 UPLOAD_FAILED
+MESSAGE_PERMISSION_DENIED
+FOLDER_PERMISSION_DENIED
 ```
 
 ---
 
-## 13. 不要再添加的节点
+## 14. 不要再添加的节点
 
 本方案不需要：
 
@@ -1362,7 +1447,7 @@ UPLOAD_FAILED
 
 ---
 
-## 14. 分阶段联调
+## 15. 分阶段联调
 
 ### 测试 1：映射查询
 
@@ -1410,7 +1495,7 @@ selected_file_* 全部为空
 发送卡片 1
 ```
 
-### 测试 5：技能 B 全局参数
+### 测试 5：技能 B 开始节点自定义参数
 
 点击卡片 1。
 
@@ -1420,6 +1505,7 @@ selected_file_* 全部为空
 request_id
 action=choose_file
 selected_file_id
+operator_id=message.sender.openID
 ```
 
 ### 测试 6：目录根节点
@@ -1442,21 +1528,37 @@ status=waiting_confirm
 此时尚未上传
 ```
 
-### 测试 8：幂等上传
+### 测试 8：重复点击防护
 
 连续点击两次确认上传。
 
 预期：
 
 ```text
-只有一次 waiting_confirm → processing 成功
-只上传一次
-第二次点击被拒绝
+第一次点击后旧卡片被 update_card 更新
+第二次回调若仍到达，状态校验会拒绝非 waiting_confirm 请求
+日志中能按 request_id 识别重复提交
 ```
+
+这项测试验证的是当前低代码流程的防重复能力，不代表已经证明并发条件下严格原子幂等。需要严格保证时，必须接入支持原子条件写或幂等键的服务。
+
+### 测试 9：权限错误
+
+分别移除群消息权限和根目录权限，预期：
+
+```text
+群消息权限错误不会显示成没有目录映射
+目录权限错误不会显示成没有目录映射
+错误信息能定位到消息读取或云盘访问阶段
+```
+
+### 测试 10：普通上传大小边界
+
+将 `max_file_size_mb` 配置为 21，预期返回 `FILE_SIZE_CONFIG_UNSUPPORTED`。恢复为 20 后，下载一个超过 20 MB 的文件，预期下载后停止上传。
 
 ---
 
-## 15. 最终验收清单
+## 16. 最终验收清单
 
 ### 技能 A
 
@@ -1469,41 +1571,48 @@ status=waiting_confirm
 - [ ] 映射查询 0、1、多条分别处理。
 - [ ] 文件类型错误展示真实类型错误。
 - [ ] `.md` 测试时白名单包含 `md`。
+- [ ] `max_file_size_mb` 在 `1..20`。
+- [ ] `only_file_sender_can_archive` 已按产品规则明确配置。
 - [ ] 单个文件仍发送卡片 1。
 - [ ] 创建请求时所有 `selected_file_*` 均为空。
 
 ### 技能 B
 
-- [ ] 开始节点声明四个全局参数。
+- [ ] 开始节点声明四个自定义参数。
 - [ ] 每次回调都是一次新的技能 B 运行。
 - [ ] 后续节点不引用技能 A 变量。
 - [ ] 每次都按 `request_id` 重新查询请求。
-- [ ] 操作者来自可信系统上下文。
+- [ ] 操作者固定取 `message.sender.openID`。
 - [ ] 文件选择只允许候选快照内部 ID。
 - [ ] 目录选择只允许当前子目录白名单。
 - [ ] 返回上级不能越过映射根目录。
 - [ ] 最终确认前不上传。
-- [ ] `waiting_confirm → processing` 只能成功一次。
+- [ ] 上传前重新查询状态并拒绝已处理请求。
+- [ ] 已明确当前方案是重复点击防护，不宣称 Base 普通更新具备原子 CAS。
 
 ### 卡片与错误
 
 - [ ] 技能 B 已发布并取得正确 `skill_xxx`。
 - [ ] 卡片按钮目标技能都是技能 B。
-- [ ] `skill_input` 参数名与 B 全局参数完全一致。
+- [ ] `skill_input` 参数名与 B 开始节点自定义参数完全一致。
 - [ ] 卡片 2 表单项标识为 `selected_folder_token`。
+- [ ] 卡片 2 下拉框和提交按钮位于同一个表单容器。
+- [ ] 所有推进状态的按钮使用 `update_card=true` 和明确 `success_message`。
+- [ ] 卡片重新发布后，发送卡片节点已经点击“更新”。
+- [ ] 根目录已授权给目录和上传节点的实际调用身份。
 - [ ] 每个错误分支绑定当前节点真实 `error`。
 - [ ] 卡片 4 显示真实结果或可读错误。
 - [ ] App Secret 和访问令牌未进入 Base、卡片变量或普通日志。
 
 ---
 
-## 16. 当前代码文件
+## 17. 当前代码文件
 
 | 文件 | 对应职责 |
 |---|---|
 | [`aily_nodes/a7_build_archive_request.py`](./aily_nodes/a7_build_archive_request.py) | 技能 A：验证直接回复关系、文件和映射，生成单文件请求快照 |
 | [`aily_nodes/a9_build_file_confirm_card.py`](./aily_nodes/a9_build_file_confirm_card.py) | 技能 A：组装单文件确认卡片和技能 B 回调参数 |
-| [`aily_nodes/b2_validate_callback.py`](./aily_nodes/b2_validate_callback.py) | 技能 B：验证开始节点全局参数、恢复请求并校验状态和白名单 |
+| [`aily_nodes/b2_validate_callback.py`](./aily_nodes/b2_validate_callback.py) | 技能 B：验证开始节点自定义参数、恢复请求并校验状态和白名单 |
 | [`aily_nodes/b_build_folder_card.py`](./aily_nodes/b_build_folder_card.py) | 技能 B：组装目录浏览卡片 |
 | [`aily_nodes/b_build_confirm_card.py`](./aily_nodes/b_build_confirm_card.py) | 技能 B：组装最终确认卡片 |
 | [`aily_nodes/b_build_result_card.py`](./aily_nodes/b_build_result_card.py) | 技能 B：组装成功或失败结果卡片 |
@@ -1511,4 +1620,4 @@ status=waiting_confirm
 
 仓库中不再保留扫描群聊历史的旧 A5，也不再保留多候选下拉卡片的旧 A8。
 
-在 Aily 中复制代码时，必须逐项声明 `main()` 返回的命名输出，包括 `ok`、`error_code` 和 `error`；不要只保留默认的 `return:string`。
+在 Aily 中复制 Python 代码后，先调试代码节点，让平台自动解析 `main()` 的返回结构；然后确认下游可以选择 `ok`、`error_code`、`error` 以及各卡片对象等命名输出。旧版界面若未自动更新，再使用 JSON 示例手动补齐输出结构，代码返回对象和节点输出类型必须完全一致。

@@ -2,7 +2,7 @@
 
 节点输入建议：
 - folder_list_result: “获取文件夹下的清单”节点的完整输出（object 或 JSON string）
-- request_id: 技能 B 开始节点全局参数，并已据此恢复归档请求
+- request_id: 技能 B 开始节点自定义参数，并已据此恢复归档请求
 - selected_file_name: 归档请求 selected_file_name
 - current_folder_token/name/url: 归档请求当前目录
 - folder_path_json: 归档请求 folder_path_json
@@ -10,8 +10,9 @@
 - warning: 归档请求 warning_message
 - callback_skill_id: 已发布技能 B 的 skill_xxx
 
-重要：Aily 代码节点必须逐项声明本文件 main() 返回的命名输出，不能只保留
-默认的 return:string，否则下游仍然无法通过“节点名.folder_options”等路径取值。
+重要：先调试 Aily 代码节点，让平台自动解析本文件 main() 的返回对象；再确认
+下游可以通过“节点名.folder_options”等路径选择命名输出。旧版界面未自动解析时，
+再使用 JSON 示例手动补齐输出结构。
 """
 
 import json
@@ -59,9 +60,10 @@ def _make_skill_object(
     callback_skill_id: str,
     request_id: str,
     action: str,
-    update_card: bool = False,
+    update_card: bool = True,
+    success_message: str = "",
 ) -> Dict[str, Any]:
-    return {
+    result = {
         "x_aily_forbid_forward_callback": True,
         "aily_action": "trigger_skill",
         "skill_id": callback_skill_id,
@@ -73,6 +75,9 @@ def _make_skill_object(
         ),
         "update_card": update_card,
     }
+    if update_card and success_message:
+        result["success_message"] = success_message
+    return result
 
 
 def _empty_result(
@@ -243,15 +248,28 @@ def main(
             observed_parent_tokens, ensure_ascii=False
         ),
         "skill_object_browse": _make_skill_object(
-            callback_skill_id, request_id, "browse"
+            callback_skill_id,
+            request_id,
+            "browse",
+            success_message="正在进入选中的文件夹…",
         ),
         "skill_object_back": _make_skill_object(
-            callback_skill_id, request_id, "back"
+            callback_skill_id,
+            request_id,
+            "back",
+            success_message="正在返回上一级目录…",
         ),
         "skill_object_choose_current": _make_skill_object(
-            callback_skill_id, request_id, "choose_current_folder"
+            callback_skill_id,
+            request_id,
+            "choose_current_folder",
+            success_message="已选择当前目录，正在生成最终确认…",
         ),
         "skill_object_cancel": _make_skill_object(
-            callback_skill_id, request_id, "cancel", update_card=True
+            callback_skill_id,
+            request_id,
+            "cancel",
+            update_card=True,
+            success_message="已取消本次归档",
         ),
     }

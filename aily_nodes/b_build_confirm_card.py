@@ -8,9 +8,10 @@ def _make_skill_object(
     callback_skill_id: str,
     request_id: str,
     action: str,
-    update_card: bool = False,
+    update_card: bool = True,
+    success_message: str = "",
 ) -> Dict[str, Any]:
-    return {
+    result = {
         "x_aily_forbid_forward_callback": True,
         "aily_action": "trigger_skill",
         "skill_id": callback_skill_id,
@@ -21,6 +22,9 @@ def _make_skill_object(
         ),
         "update_card": update_card,
     }
+    if update_card and success_message:
+        result["success_message"] = success_message
+    return result
 
 
 def _result(error: str = "", error_code: str = "") -> Dict[str, Any]:
@@ -94,12 +98,22 @@ def main(
         "warning": str(warning or "").strip(),
         "initiator": {"id": requester_id} if requester_id else {},
         "skill_object_confirm": _make_skill_object(
-            callback_skill_id, request_id, "confirm_upload"
+            callback_skill_id,
+            request_id,
+            "confirm_upload",
+            success_message="已提交归档，正在上传文件…",
         ),
         "skill_object_return": _make_skill_object(
-            callback_skill_id, request_id, "return_folder"
+            callback_skill_id,
+            request_id,
+            "return_folder",
+            success_message="正在返回目录选择…",
         ),
         "skill_object_cancel": _make_skill_object(
-            callback_skill_id, request_id, "cancel", update_card=True
+            callback_skill_id,
+            request_id,
+            "cancel",
+            update_card=True,
+            success_message="已取消本次归档",
         ),
     }

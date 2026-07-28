@@ -67,7 +67,7 @@ def trigger_payload(parent_id=FILE_MESSAGE_ID):
     }
 
 
-def replied_file_payload(file_name="项目终版.md", file_size=0):
+def replied_file_payload(file_name="项目终版.md", file_size=0, sender_id=USER_ID):
     return {
         "data": {
             "items": [
@@ -76,7 +76,7 @@ def replied_file_payload(file_name="项目终版.md", file_size=0):
                     "chat_id": CHAT_ID,
                     "msg_type": "file",
                     "deleted": False,
-                    "sender": {"sender_type": "user", "id": USER_ID},
+                    "sender": {"sender_type": "user", "id": sender_id},
                     "body": {
                         "content": json.dumps(
                             {
@@ -170,7 +170,55 @@ class SkillANodeTests(unittest.TestCase):
         self.assertFalse(context["ok"])
         self.assertEqual(context["error_code"], "FILE_TOO_LARGE")
 
-    def test_file_confirmation_button_passes_b_global_parameters(self):
+    def test_single_upload_configuration_cannot_exceed_twenty_mb(self):
+        mapping = mapping_payload()
+        mapping["data"]["items"][0]["fields"]["max_file_size_mb"] = 21
+        context = build_request(
+            mapping,
+            trigger_payload(),
+            replied_file_payload(),
+            CHAT_ID,
+            USER_ID,
+            TRIGGER_ID,
+            now_ms=1000,
+        )
+
+        self.assertFalse(context["ok"])
+        self.assertEqual(context["error_code"], "FILE_SIZE_CONFIG_UNSUPPORTED")
+
+    def test_other_users_file_is_allowed_by_default(self):
+        context = build_request(
+            mapping_payload(),
+            trigger_payload(),
+            replied_file_payload(sender_id="ou_colleague"),
+            CHAT_ID,
+            USER_ID,
+            TRIGGER_ID,
+            now_ms=1000,
+        )
+
+        self.assertTrue(context["ok"])
+        self.assertEqual(context["file_sender_id"], "ou_colleague")
+
+    def test_sender_only_policy_can_be_enabled_per_mapping(self):
+        mapping = mapping_payload()
+        mapping["data"]["items"][0]["fields"][
+            "only_file_sender_can_archive"
+        ] = True
+        context = build_request(
+            mapping,
+            trigger_payload(),
+            replied_file_payload(sender_id="ou_colleague"),
+            CHAT_ID,
+            USER_ID,
+            TRIGGER_ID,
+            now_ms=1000,
+        )
+
+        self.assertFalse(context["ok"])
+        self.assertEqual(context["error_code"], "FILE_SENDER_NOT_ALLOWED")
+
+    def test_file_confirmation_button_passes_b_custom_parameters(self):
         context = valid_request_context()
         card = build_file_card(
             context["candidate_files_json"],
@@ -189,6 +237,13 @@ class SkillANodeTests(unittest.TestCase):
             skill_input["selected_file_id"],
             context["candidate_file_id"],
         )
+        self.assertTrue(card["skill_object_choose_file"]["update_card"])
+        self.assertIn(
+            "已确认文件",
+            card["skill_object_choose_file"]["success_message"],
+        )
+        self.assertTrue(card["skill_object_cancel"]["update_card"])
+        self.assertIn("已取消", card["skill_object_cancel"]["success_message"])
 
 
 class SkillBNodeTests(unittest.TestCase):
@@ -311,6 +366,14 @@ class SkillBNodeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["folder_options"], [{"text": "A", "value": "folder_a"}])
         self.assertEqual(len(json.loads(result["allowed_child_folders_json"])), 1)
+        for key in (
+            "skill_object_browse",
+            "skill_object_back",
+            "skill_object_choose_current",
+            "skill_object_cancel",
+        ):
+            self.assertTrue(result[key]["update_card"])
+            self.assertTrue(result[key]["success_message"])
 
     def test_confirm_and_result_cards(self):
         confirm = build_confirm_card(
@@ -327,6 +390,17 @@ class SkillBNodeTests(unittest.TestCase):
             json.loads(confirm["skill_object_confirm"]["skill_input"])["action"],
             "confirm_upload",
         )
+        self.assertTrue(confirm["skill_object_confirm"]["update_card"])
+        self.assertIn(
+            "正在上传",
+            confirm["skill_object_confirm"]["success_message"],
+        )
+        for key in (
+            "skill_object_return",
+            "skill_object_cancel",
+        ):
+            self.assertTrue(confirm[key]["update_card"])
+            self.assertTrue(confirm[key]["success_message"])
 
         result = build_result_card(
             "success",

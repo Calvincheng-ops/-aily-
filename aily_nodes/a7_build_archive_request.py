@@ -18,6 +18,7 @@ from typing import Any, Dict, List
 
 
 REQUEST_TTL_MS = 30 * 60 * 1000
+SINGLE_UPLOAD_MAX_MB = 20
 
 
 def _load_json(value: Any, default: Any) -> Any:
@@ -142,6 +143,21 @@ def _integer(value: Any, default: int = 0) -> int:
         return default
 
 
+def _boolean(value: Any, default: bool = False) -> bool:
+    value = _first(value, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ("true", "1", "yes", "y", "是", "已勾选"):
+            return True
+        if normalized in ("false", "0", "no", "n", "否", "未勾选", ""):
+            return False
+    return default
+
+
 def _base_result() -> Dict[str, Any]:
     return {
         "ok": False,
@@ -174,6 +190,8 @@ def _base_result() -> Dict[str, Any]:
         "root_folder_name": "",
         "root_folder_url": "",
         "max_file_size_mb": 0,
+        "single_upload_max_mb": SINGLE_UPLOAD_MAX_MB,
+        "only_file_sender_can_archive": False,
         "allowed_file_types_json": "[]",
         "initial_status": "",
         "folder_path_json": "[]",
@@ -254,12 +272,6 @@ def main(
         )
 
     file_sender_id = _sender_id(replied)
-    if file_sender_id != requester_id:
-        return _fail(
-            result,
-            "FILE_SENDER_NOT_ALLOWED",
-            "默认只允许归档由发起人本人发送的文件。",
-        )
 
     content = _content_object(replied)
     file_key = str(content.get("file_key") or content.get("fileKey") or "").strip()
@@ -311,7 +323,11 @@ def main(
     root_url = str(_first(fields.get("root_folder_url"), "") or "").strip()
     allowed_types = _extension_list(fields.get("allowed_file_types"))
     max_size_mb = _integer(_first(fields.get("max_file_size_mb"), 0), 0)
-    enabled = _first(fields.get("enabled"), False)
+    enabled = _boolean(fields.get("enabled"), False)
+    only_file_sender_can_archive = _boolean(
+        fields.get("only_file_sender_can_archive"),
+        False,
+    )
 
     result.update(
         {
@@ -321,14 +337,21 @@ def main(
             "root_folder_name": root_name,
             "root_folder_url": root_url,
             "max_file_size_mb": max_size_mb,
+            "only_file_sender_can_archive": only_file_sender_can_archive,
             "allowed_file_types_json": json.dumps(allowed_types, ensure_ascii=False),
         }
     )
 
     if mapping_chat_id != chat_id:
         return _fail(result, "MAPPING_CHAT_MISMATCH", "映射记录与当前群聊不一致。")
-    if enabled not in (True, 1, "true", "True", "1", "是", "已勾选"):
+    if not enabled:
         return _fail(result, "MAPPING_DISABLED", "当前群归档功能未启用。")
+    if only_file_sender_can_archive and file_sender_id != requester_id:
+        return _fail(
+            result,
+            "FILE_SENDER_NOT_ALLOWED",
+            "当前群只允许归档由发起人本人发送的文件。",
+        )
     if not root_token:
         return _fail(result, "ROOT_FOLDER_MISSING", "群目录映射缺少根目录 token。")
     if not root_name:
@@ -352,6 +375,13 @@ def main(
             result,
             "FILE_SIZE_CONFIG_INVALID",
             "群目录映射的最大文件大小配置无效。",
+        )
+    if max_size_mb > SINGLE_UPLOAD_MAX_MB:
+        return _fail(
+            result,
+            "FILE_SIZE_CONFIG_UNSUPPORTED",
+            "当前流程使用普通上传节点，max_file_size_mb 不能超过 "
+            f"{SINGLE_UPLOAD_MAX_MB}；更大文件必须另建分片上传流程。",
         )
     if file_size and file_size > max_size_mb * 1024 * 1024:
         return _fail(
