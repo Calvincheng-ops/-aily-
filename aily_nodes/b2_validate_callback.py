@@ -85,6 +85,7 @@ def _base_result() -> Dict[str, Any]:
         "request_id": "",
         "action": "",
         "status": "",
+        "chat_id": "",
         "requester_id": "",
         "operator_id": "",
         "selected_file_id": "",
@@ -145,11 +146,13 @@ def main(
     stored_request_id = str(normalized.get("request_id") or "").strip()
     requester_id = str(normalized.get("requester_id") or "").strip()
     status = str(normalized.get("status") or "").strip()
+    chat_id = str(normalized.get("chat_id") or "").strip()
     root_token = str(normalized.get("root_folder_token_snapshot") or "").strip()
     result.update(
         {
             "request_record_id": str(record.get("record_id") or ""),
             "status": status,
+            "chat_id": chat_id,
             "requester_id": requester_id,
         }
     )

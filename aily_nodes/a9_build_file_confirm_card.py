@@ -1,4 +1,4 @@
-"""Aily A9 node: build the single-file confirmation card variables."""
+"""Build the single-file confirmation card variables for Skill A."""
 
 import json
 from typing import Any, Dict, List

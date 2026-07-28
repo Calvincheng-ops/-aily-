@@ -1,5 +1,6 @@
 """Aily Skill B node: normalize upload outcome into Card 4 variables."""
 
+import json
 from typing import Any, Dict
 
 
@@ -15,6 +16,26 @@ def _size_text(value: Any) -> str:
     if size < 1024**3:
         return f"{size / 1024**2:.1f} MB"
     return f"{size / 1024**3:.1f} GB"
+
+
+def _path_text(value: Any) -> str:
+    if isinstance(value, list):
+        path = value
+    elif isinstance(value, str):
+        text = value.strip()
+        try:
+            path = json.loads(text)
+        except (TypeError, ValueError):
+            return text
+    else:
+        return str(value or "").strip()
+    if not isinstance(path, list):
+        return ""
+    return " / ".join(
+        str(item.get("name") or "未命名目录")
+        for item in path
+        if isinstance(item, dict)
+    )
 
 
 def _result(error: str = "", error_code: str = "") -> Dict[str, Any]:
@@ -56,7 +77,7 @@ def main(
     status = str(status or "").strip().lower()
     request_id = str(request_id or "").strip()
     selected_file_name = str(selected_file_name or "").strip()
-    target_folder_path = str(target_folder_path or "").strip()
+    target_folder_path = _path_text(target_folder_path)
 
     if status not in ("success", "failed"):
         return _result("status 必须是 success 或 failed", "INVALID_RESULT_STATUS")

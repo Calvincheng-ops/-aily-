@@ -1,12 +1,21 @@
 import json
 import unittest
 
+from aily_nodes.a2_normalize_trigger_message import main as normalize_trigger
 from aily_nodes.a7_build_archive_request import main as build_request
 from aily_nodes.a9_build_file_confirm_card import main as build_file_card
+from aily_nodes.b0_prepare_request_filter import main as prepare_request_filter
 from aily_nodes.b2_validate_callback import main as validate_callback
+from aily_nodes.b3_prepare_action import main as prepare_action
+from aily_nodes.b5_validate_processing_request import (
+    main as validate_processing_request,
+)
+from aily_nodes.b6_validate_upload_policy import main as validate_upload_policy
 from aily_nodes.b_build_confirm_card import main as build_confirm_card
 from aily_nodes.b_build_folder_card import main as build_folder_card
 from aily_nodes.b_build_result_card import main as build_result_card
+from aily_nodes.common_now_ms import main as current_time
+from aily_nodes.common_build_url_object import main as build_url_object
 
 
 CHAT_ID = "oc_demo"
@@ -106,6 +115,53 @@ def valid_request_context():
 
 
 class SkillANodeTests(unittest.TestCase):
+    def test_url_object_helper_builds_base_link_cell(self):
+        result = build_url_object("https://example/file", "项目终版.md")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["url_object"],
+            {
+                "text": "项目终版.md",
+                "link": "https://example/file",
+            },
+        )
+
+    def test_trigger_message_normalizer_builds_base_filter_array(self):
+        normalized = normalize_trigger(
+            {
+                "code": "200",
+                "data": {
+                    "code": 0,
+                    "data": {
+                        "items": trigger_payload()["data"]["items"],
+                    },
+                    "msg": "success",
+                },
+                "message": "OK",
+            },
+            TRIGGER_ID,
+        )
+
+        self.assertTrue(normalized["ok"])
+        self.assertEqual(normalized["chat_id"], CHAT_ID)
+        self.assertEqual(normalized["chat_id_filter_values"], [CHAT_ID])
+        self.assertEqual(normalized["parent_id"], FILE_MESSAGE_ID)
+        self.assertEqual(normalized["sender_id"], USER_ID)
+
+    def test_trigger_message_normalizer_does_not_guess_wrong_message(self):
+        normalized = normalize_trigger(trigger_payload(), "om_not_present")
+
+        self.assertFalse(normalized["ok"])
+        self.assertEqual(
+            normalized["error_code"],
+            "TRIGGER_MESSAGE_NOT_FOUND",
+        )
+
+    def test_common_time_node_returns_unix_milliseconds(self):
+        value = current_time()["now_ms"]
+        self.assertGreater(value, 1_000_000_000_000)
+
     def test_directly_replied_single_file_builds_unselected_request(self):
         context = valid_request_context()
 
@@ -117,6 +173,17 @@ class SkillANodeTests(unittest.TestCase):
         self.assertEqual(context["selected_file_id"], "")
         self.assertEqual(context["selected_file_key"], "")
         self.assertEqual(context["expires_at_ms"], 1000 + 30 * 60 * 1000)
+        self.assertEqual(
+            context["root_folder_url_object"],
+            {
+                "text": "项目归档",
+                "link": "https://example/root",
+            },
+        )
+        self.assertEqual(
+            context["current_folder_url_object"],
+            context["root_folder_url_object"],
+        )
 
         candidates = json.loads(context["candidate_files_json"])
         self.assertEqual(len(candidates), 1)
@@ -247,17 +314,41 @@ class SkillANodeTests(unittest.TestCase):
 
 
 class SkillBNodeTests(unittest.TestCase):
+    def test_request_filter_adapter_keeps_scalar_and_builds_array(self):
+        result = prepare_request_filter(" archive_demo ")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["request_id"], "archive_demo")
+        self.assertEqual(
+            result["request_id_filter_values"],
+            ["archive_demo"],
+        )
+
+    def test_request_filter_adapter_rejects_empty_id(self):
+        result = prepare_request_filter("")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "REQUEST_ID_MISSING")
+        self.assertEqual(result["request_id_filter_values"], [])
+
     def _request_payload(self, context, **overrides):
         candidate = json.loads(context["candidate_files_json"])[0]
         fields = {
             "request_id": context["request_id"],
             "requester_id": USER_ID,
+            "chat_id": CHAT_ID,
             "status": "selecting_file",
             "expires_at": 2_000_000,
             "candidate_files_json": context["candidate_files_json"],
             "root_folder_token_snapshot": "root_demo",
             "folder_path_json": json.dumps(
-                [{"token": "root_demo", "name": "项目归档"}],
+                [
+                    {
+                        "token": "root_demo",
+                        "name": "项目归档",
+                        "url": "https://example/root",
+                    }
+                ],
                 ensure_ascii=False,
             ),
             "allowed_child_folders_json": json.dumps(
@@ -297,6 +388,7 @@ class SkillBNodeTests(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"])
+        self.assertEqual(result["chat_id"], CHAT_ID)
         self.assertEqual(
             json.loads(result["selected_candidate_json"])["file_key"],
             "file_key_demo",
@@ -315,6 +407,145 @@ class SkillBNodeTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_code"], "INVALID_FOLDER_SELECTION")
+
+    def test_prepare_choose_file_outputs_flat_base_fields(self):
+        context = valid_request_context()
+        candidate = json.loads(context["candidate_files_json"])[0]
+        request = self._request_payload(context)["data"]["items"][0]["fields"]
+        result = prepare_action(
+            "choose_file",
+            json.dumps(request, ensure_ascii=False),
+            json.dumps(candidate, ensure_ascii=False),
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["next_step"], "list_folder")
+        self.assertEqual(result["status"], "selecting_folder")
+        self.assertEqual(result["selected_file_key"], "file_key_demo")
+        self.assertEqual(result["source_message_id"], FILE_MESSAGE_ID)
+        self.assertEqual(
+            result["current_folder_url_object"],
+            {
+                "text": "项目归档",
+                "link": "https://example/root",
+            },
+        )
+
+    def test_prepare_browse_and_back_keep_root_boundary(self):
+        context = valid_request_context()
+        request = self._request_payload(
+            context,
+            status="selecting_folder",
+        )["data"]["items"][0]["fields"]
+        folder = {
+            "token": "folder_a",
+            "name": "A",
+            "url": "https://example/a",
+            "parent_token": "root_demo",
+        }
+        browse = prepare_action(
+            "browse",
+            json.dumps(request, ensure_ascii=False),
+            selected_folder_json=json.dumps(folder, ensure_ascii=False),
+        )
+        self.assertTrue(browse["ok"])
+        self.assertEqual(browse["current_folder_token"], "folder_a")
+        self.assertEqual(
+            browse["current_folder_url_object"],
+            {
+                "text": "A",
+                "link": "https://example/a",
+            },
+        )
+
+        request["folder_path_json"] = browse["folder_path_json"]
+        back = prepare_action(
+            "back",
+            json.dumps(request, ensure_ascii=False),
+        )
+        self.assertTrue(back["ok"])
+        self.assertEqual(back["current_folder_token"], "root_demo")
+
+        at_root = prepare_action(
+            "back",
+            json.dumps(request | {"folder_path_json": '[{"token":"root_demo","name":"项目归档"}]'}),
+        )
+        self.assertFalse(at_root["ok"])
+        self.assertEqual(at_root["error_code"], "ALREADY_AT_ROOT")
+
+    def test_prepare_current_folder_builds_target_url_object(self):
+        context = valid_request_context()
+        request = self._request_payload(
+            context,
+            status="selecting_folder",
+        )["data"]["items"][0]["fields"]
+        result = prepare_action(
+            "choose_current_folder",
+            json.dumps(request, ensure_ascii=False),
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["next_step"], "send_confirm_card")
+        self.assertEqual(
+            result["target_folder_url_object"],
+            {
+                "text": "项目归档",
+                "link": "https://example/root",
+            },
+        )
+
+    def test_processing_request_validator_outputs_trusted_upload_fields(self):
+        context = valid_request_context()
+        payload = self._request_payload(
+            context,
+            status="processing",
+            source_message_id=FILE_MESSAGE_ID,
+            selected_file_key="file_key_demo",
+            selected_file_name="项目终版.md",
+            selected_file_type="md",
+            target_folder_token="root_demo",
+            target_folder_name="项目归档",
+            target_folder_url={"text": "项目归档", "link": "https://example/root"},
+        )
+        result = validate_processing_request(payload, context["request_id"])
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["should_upload"])
+        self.assertEqual(result["chat_id_filter_values"], [CHAT_ID])
+        self.assertEqual(result["target_folder_token"], "root_demo")
+        self.assertEqual(result["target_folder_path"], "项目归档")
+
+    def test_processing_request_validator_stops_terminal_request(self):
+        context = valid_request_context()
+        payload = self._request_payload(context, status="success")
+        result = validate_processing_request(payload, context["request_id"])
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["should_upload"])
+        self.assertTrue(result["already_finished"])
+
+    def test_upload_policy_uses_actual_size_and_current_mapping(self):
+        result = validate_upload_policy(
+            mapping_payload(),
+            CHAT_ID,
+            "md",
+            1024,
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["actual_size"], 1024)
+        self.assertEqual(result["max_bytes"], 20 * 1024 * 1024)
+
+    def test_upload_policy_rejects_empty_download(self):
+        result = validate_upload_policy(
+            mapping_payload(),
+            CHAT_ID,
+            "md",
+            0,
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "FILE_EMPTY")
 
     def test_operator_must_be_original_requester(self):
         context = valid_request_context()
@@ -417,6 +648,23 @@ class SkillBNodeTests(unittest.TestCase):
         )
         self.assertTrue(result["ok"])
         self.assertTrue(result["is_success"])
+        result_from_path_json = build_result_card(
+            "success",
+            "archive_demo",
+            USER_ID,
+            "项目终版.md",
+            "md",
+            "A",
+            '[{"name":"项目归档"},{"name":"A"}]',
+            "https://example/a",
+            "https://example/a/file",
+            1024,
+            2000,
+        )
+        self.assertEqual(
+            result_from_path_json["target_folder_path"],
+            "项目归档 / A",
+        )
         self.assertEqual(result["result_size_text"], "1.0 MB")
 
 

@@ -1,364 +1,203 @@
-# 飞书 Aily 文件归档应用搭建手册（V2 重搭唯一实施版）
+# 飞书 Aily 文件归档应用：基于已配置 Base 的逐步重搭手册
 
-> 本文是当前项目唯一有效的搭建指南，适用于从零重新搭建。
+> 目标：保留当前已经配置好的 Base，从空白 Aily 工作流开始，按本文第 1 步做到第 16 步，即可搭好“回复群文件并 @机器人归档 → 确认文件 → 选择目录 → 最终确认 → 上传云盘”的应用。
 >
-> 本版已经删除“读取大量群聊历史、让智能体猜测最终文件”的方案。技能 A 只处理用户明确回复的文件消息；技能 B 是独立技能，每次运行从 Aily 系统全局变量和自己开始节点的自定义参数进入，并通过 `request_id` 从多维表格恢复业务状态。
+> 本文是仓库唯一实施手册。不要同时参考旧流程，不要添加智能体猜文件、读取大量群聊历史或自建 HTTP 回调。
+>
+> 本手册与仓库的 `aily_nodes/` 代码文件共同构成必备施工包。代码步骤必须点击本文链接并复制完整文件；不能只拿一篇 Markdown、缺少 Python 附件进行搭建。每个代码节点的完整 `main()` 入参绑定和关键输出合同都写在对应步骤中。
 
-## 0. 先读结论
+## 开工前先准备
 
-### 0.1 用户必须这样发起归档
+准备以下内容，后文直接使用：
 
-1. 用户先在群里发送一个文件。
-2. 用户对这条文件消息点“回复”。
-3. 用户在回复中 @文件归档机器人，并发送“归档”指令。
-
-示例：
-
-```text
-回复：项目终版.md
-@文件归档机器人 归档这个文件
-```
-
-如果用户没有回复文件消息，机器人不猜测最近文件，直接提示：
-
-```text
-请回复需要归档的文件消息，并 @机器人发送“归档”。
-```
-
-### 0.2 本项目只使用两个技能
-
-| 技能 | 职责 | 结束点 |
-|---|---|---|
-| 技能 A：发起文件归档 | 识别当前群、取得被回复文件、查询群目录映射、创建请求、发送文件确认卡片 | 卡片 1 发出后结束 |
-| 技能 B：处理归档卡片 | 接收每次卡片点击、恢复请求、选择目录、最终确认、上传、返回结果 | 每次处理完当前点击后结束 |
-
-技能 A 不会在原运行现场继续到技能 B。卡片点击会启动一次全新的技能 B。
-
-### 0.3 三条不可违反的规则
-
-1. **即使只有一个文件，也必须先让用户点击卡片确认。**
-2. 技能 B 不得引用技能 A 的节点变量；只能读取本次运行的系统全局变量、开始节点自定义参数和多维表格记录。
-3. 失败分支必须展示真实节点的 `error`，不得用一条固定文案代替所有错误。
-
----
-
-## 1. 为什么改成这个方案
-
-### 1.1 2026-07-28 测试失败的真实原因
-
-测试时，多维表格映射查询实际成功：
-
-- `chat_id` 精确命中。
-- 返回 `total=1`。
-- `enabled=true`。
-- 根目录名称、token 和链接均存在。
-
-本次文件是：
-
-```text
-PRODUCTION-智能体版.md
-```
-
-但映射记录中的 `allowed_file_types` 只有：
-
-```text
-pdf, docx, xlsx, pptx, zip
-```
-
-因为没有 `md`，文件在类型校验时被过滤。后续失败分支又错误地写死成“当前群没有找到启用的归档目录映射”，导致问题被误判。
-
-重新搭建时必须同时修正：
-
-1. 映射表填写真实需要支持的扩展名；需要归档 Markdown 时必须包含 `md`。
-2. 类型不允许时显示“文件类型不允许”，不能显示“没有目录映射”。
-3. 任何失败分支都绑定当前节点的真实 `error` 输出。
-
-### 1.2 为什么不再读取群聊历史
-
-测试日志已经证明，触发消息包含：
-
-```text
-trigger_message_id
-parent_id
-root_id
-```
-
-且 `parent_id/root_id` 精确指向被回复的文件消息。直接查询这两条消息即可得到：
-
-```text
-file_key
-file_name
-file_message_id
-file_sender_open_id
-```
-
-因此以下节点全部删除：
-
-- 获取最近 20、30 或更多条群聊消息。
-- 将群聊历史交给智能体判断哪个文件是“终版”。
-- 从最近 30 分钟消息中扫描候选文件。
-- 同时让标准化代码、智能体和 A5 重复寻找文件。
-
-这样可以避免旧卡片、撤回消息、其他机器人消息和历史错误信息污染上下文。
-
----
-
-## 2. 最终架构
-
-```mermaid
-flowchart TD
-    U["用户回复文件消息并 @机器人发送归档"] --> A0["技能 A：读取 chat_id、触发 message_id、发起人"]
-    A0 --> A1{"群聊、@机器人、归档指令是否有效"}
-    A1 -->|否| AE1["提示正确使用方式并结束"]
-    A1 -->|是| A2["查询当前触发消息"]
-    A2 --> P{"是否存在 parent_id"}
-    P -->|否| AE2["提示必须回复文件消息"]
-    P -->|是| A3["A3：按 parent_id 查询被回复消息"]
-    A3 --> F{"被回复消息是否为 file"}
-    F -->|否| AE3["提示被回复内容不是文件"]
-    F -->|是| A4["A4：标准化被回复文件信息"]
-    A4 --> A5["A5：按 chat_id 精确查询唯一启用映射"]
-    A5 --> A6["A6：校验文件和映射"]
-    A6 --> A7["A7：生成单文件请求快照"]
-    A7 --> A8["A8：创建 selecting_file 请求"]
-    A8 --> A9["A9：组装单文件确认卡片变量"]
-    A9 --> C1["卡片 1：确认归档这个文件"]
-
-    C1 --> B0["技能 B 新运行：读取系统全局变量和开始节点自定义参数"]
-    B0 --> B1["按 request_id 恢复归档请求"]
-    B1 --> B2{"校验操作者、状态、有效期和 action"}
-    B2 -->|choose_file| B3["保存确认文件并进入 selecting_folder"]
-    B3 --> D1["读取根目录直属子文件夹"]
-    D1 --> BC2["技能 B：校验目录并组装卡片 2 变量"]
-    BC2 --> C2["卡片 2：浏览或选择当前目录"]
-
-    C2 --> B0
-    B2 -->|browse / back| D2["更新当前路径并读取直属子文件夹"]
-    D2 --> C2
-    B2 -->|choose_current_folder| BC3["技能 B：组装最终确认卡片变量"]
-    BC3 --> C3["卡片 3：最终确认"]
-    C3 --> B0
-    B2 -->|return_folder| C2
-    B2 -->|confirm_upload| UP["重查状态、防重复提交、下载文件、上传云盘"]
-    UP --> BC4["技能 B：组装归档结果卡片变量"]
-    BC4 --> C4["卡片 4：成功或失败结果"]
-    B2 -->|cancel| BC["写入 cancelled 并结束"]
-```
-
-独立流程图源文件：[`ARCHITECTURE_V2.mmd`](./ARCHITECTURE_V2.mmd)。
-
----
-
-## 3. 推荐搭建顺序
-
-不要先把技能 A 全部搭完。按照下面顺序可以避免回调技能 ID 和参数反复返工。
-
-### 阶段一：准备数据
-
-1. 建立“群目录映射”表。
-2. 建立“归档请求”表。
-3. 填写一条真实群映射并单独测试查询。
-
-### 阶段二：先搭技能 B 的空入口
-
-1. 新建技能 B。
-2. 在开始节点声明四个自定义参数。
-3. 临时只连接一个调试输出节点，确认能显示四个参数。
-4. 发布技能 B。
-5. 记录技能 B 的 `skill_xxx`。
-
-### 阶段三：制作四张卡片
-
-1. 卡片 1：确认文件。
-2. 卡片 2：浏览目录。
-3. 卡片 3：最终确认。
-4. 卡片 4：归档结果。
-
-所有交互卡片的目标技能都指向已发布的技能 B。
-
-### 阶段四：搭技能 A
-
-技能 A 只做到“创建请求并发出卡片 1”。
-
-### 阶段五：逐个补齐技能 B action
-
-按以下顺序测试：
-
-1. `choose_file`
-2. `cancel`
-3. `choose_current_folder`
-4. `browse`
-5. `back`
-6. `return_folder`
-7. `confirm_upload`
-
-不要一次搭完所有分支再测试。
-
----
-
-## 4. 飞书资源与多维表格
-
-### 4.1 当前资源标识
-
-| 配置项 | 值 |
+| 名称 | 当前值或填写方式 |
 |---|---|
 | Base App Token | `WHaibyXvuaXuJpsDraJcAAM9nIb` |
 | 群目录映射 Table ID | `tblacRVYZZ4SJmWW` |
 | 启用映射 View ID | `vewPOqHrk9` |
 | 归档请求 Table ID | `tblyUgvj29jAL275` |
+| 技能 A 名称 | `发起文件归档-V2` |
+| 技能 B 名称 | `处理文件归档卡片-V2` |
+| 技能 B ID | 完成第 3 步后取得，格式必须是 `skill_xxx` |
+| 测试群 ID | 当前映射记录中的 `chat_id` |
+| 测试根目录 | 当前映射记录中的 `root_folder_token` |
+
+全程遵守四条规则：
+
+1. 用户必须回复一条文件消息，再 @机器人发送“归档”。
+2. 即使只有一个文件，也必须先发卡片 1，让用户确认。
+3. 技能 B 每次点击都是一次新运行，只能靠卡片传入的 `request_id` 从 Base 恢复状态；技能 A 内可见的上游变量不会跨越用户点击自动保留。
+4. App Secret、访问令牌不得写入代码、卡片、Base 或日志。
+
+最终只有两条工作流：
+
+```text
+技能 A：开始 → 查触发消息 → 查被回复文件 → 查群映射 → 创建请求
+       → 用 A 的上游变量组装卡片 1（按钮指向技能 B）→ 发卡片 1 → 结束
+
+用户点击卡片：卡片 trigger_skill → 技能 B 新运行
+
+技能 B：开始参数 → 按 request_id 查请求 → 校验点击人和状态 → action 分支
+       ├─ choose_file / browse / back / return_folder → 卡片 2
+       ├─ choose_current_folder → 卡片 3
+       ├─ confirm_upload → 下载 → 上传 → 卡片 4
+       └─ cancel → 结束
+```
+
+### 架构决定：不要把“工作流 B”顺序节点接在技能 A 的卡片后面
+
+Aily 允许在技能 A 中添加“工作流 B”节点，并把该节点上方的变量绑定为 B 的输入。这是**顺序调用节点**：A 执行到该节点时就会发起 B，而不是等未来的卡片点击事件。
+
+卡片点击是另一个时间点发生的**异步事件**。发送卡片节点不会暂停并等待用户点击，所以：
+
+```text
+错误：
+A 创建请求 → 发卡片 1 → 工作流 B 节点
+                         ↑ B 会立刻执行，用户还没有点击
+
+正确：
+A 创建请求 → 组装卡片按钮的 skill_input → 发卡片 1 → A 结束
+用户点击按钮 → 卡片的 trigger_skill 启动 B → B 从 Base 恢复请求
+```
+
+本项目不在技能 A 中添加“工作流 B”顺序节点。A 的上游变量通过以下两步被安全使用：
+
+1. `a9_build_file_confirm_card.py` 把 `A5.request_id`、固定 `action` 和候选文件内部 ID 写进按钮的 `skill_input`。
+2. 用户点击后，卡片用 `skill_id=技能 B ID` 启动 B；B 只信任 `request_id` 和点击人的系统 `open_id`，其余业务状态从 Base 重查。
+
+这样不会影响卡片回调，反而能避免 B 在用户确认前提前执行。以后若有与卡片点击无关、确实需要立即执行的公共计算，才考虑从 A 同步调用子工作流；不要用它传递异步回调状态。
+
+---
+
+## 第 1 步：配置应用能力和权限
+
+在飞书开放平台/Aily 应用配置中完成：
+
+1. 启用机器人能力。
+2. 把机器人加入测试群。
+3. 开通读取群消息、读取消息资源所需权限。
+4. 开通读取和上传云盘文件所需权限。
+5. 开通读取、创建和更新多维表格记录所需权限。
+6. 将测试根目录共享给工作流节点实际使用的身份。
+7. 将 Base 共享给工作流节点实际使用的身份。
+8. 发布应用权限变更。
 
 注意：
 
-- Table ID 只填 `tbl...`。
-- View ID 只填 `vew...`。
-- 不要把完整多维表格链接填进 Table ID。
-- 不要把两张表的 Table ID 填反。
+- 把文件夹链接写进 Base 不等于授予机器人权限。
+- “目录清单”和“上传文件”节点必须使用同一个有权限的身份。
+- 技能 A 要能读映射表并创建请求；技能 B 要能查询和更新请求。
 
-### 4.2 群目录映射表
+完成检查：
 
-| 字段 | 建议类型 | 必填 | 说明 |
-|---|---|---:|---|
-| `mapping_id` | 单行文本 | 是 | 管理编号，例如 `MAP-0001` |
-| `chat_id` | 单行文本 | 是 | 群聊 ID，格式通常为 `oc_...` |
-| `chat_name` | 单行文本 | 是 | 仅用于展示和排查，不用于主匹配 |
-| `root_folder_token` | 单行文本 | 是 | 根目录纯 token |
-| `root_folder_name` | 单行文本 | 是 | 根目录展示名称 |
-| `root_folder_url` | 超链接 | 是 | 根目录链接 |
-| `enabled` | 复选框 | 是 | 只有启用记录可以使用 |
-| `allowed_file_types` | 多选 | 是 | 不带点号的小写扩展名 |
-| `max_file_size_mb` | 数字 | 是 | 普通上传流程最大只能填 `20` |
-| `only_file_sender_can_archive` | 复选框 | 否 | 默认不勾选；勾选后只允许文件发送者本人发起归档 |
-| `updated_at` | 日期时间 | 否 | 管理用 |
+- [ ] 机器人已经在测试群。
+- [ ] 机器人身份可以读取 Base。
+- [ ] 机器人身份可以读取测试根目录清单。
+- [ ] 机器人身份可以向测试根目录上传一个测试文件。
 
-正确示例：
+任何一项失败都先修权限，不进入下一步。
+
+---
+
+## 第 2 步：核对多维表格
+
+当前 Base 已经建好，不要重新创建。打开：
 
 ```text
-chat_id                 oc_ef1aa1409f9068ff12c892a42f32e73d
-root_folder_token       SDiif2417lQWmidJfFMcDIyXn1e
-root_folder_name        测试文件夹
-enabled                 true
-allowed_file_types      pdf, docx, xlsx, pptx, zip, md
-max_file_size_mb        20
-only_file_sender_can_archive  false
+https://westoeast.feishu.cn/base/WHaibyXvuaXuJpsDraJcAAM9nIb
 ```
 
-当前流程使用飞书普通上传接口，不支持空文件或超过 20 MB 的文件。需要支持更大文件时，必须另建分片上传流程，不能只把 `max_file_size_mb` 改大。
+### 2.1 核对“群目录映射”
 
-扩展名规则：
-
-- 写 `md`，不要写 `.md`。
-- 全部使用小写。
-- 需要支持 Markdown 时必须包含 `md`。
-- 空白名单按配置错误处理，不建议解释为“允许全部”。
-
-根目录 token 规则：
+Table ID：
 
 ```text
-正确：SDiif2417lQWmidJfFMcDIyXn1e
-错误：https://xxx.feishu.cn/drive/folder/SDiif...?from=...
-错误：SDiif...?from=...
+tblacRVYZZ4SJmWW
 ```
 
-`chat_name` 可能被修改或出现客户端展示后缀，因此查询只能使用 `chat_id`，不能使用群名称。
+必须有以下字段：
 
-### 4.3 映射查询返回值的实际结构
+| 字段 | 类型 | 填写规则 |
+|---|---|---|
+| `mapping_id` | 自动编号 | 自动生成 |
+| `chat_id` | 文本 | `oc_...` |
+| `chat_name` | 文本 | 仅展示 |
+| `root_folder_token` | 文本 | 只填 token，不填完整链接 |
+| `root_folder_name` | 文本 | 根目录名称 |
+| `root_folder_url` | URL | 完整文件夹链接 |
+| `enabled` | 复选框 | 必须勾选 |
+| `allowed_file_types` | 多选 | 小写、不带点 |
+| `max_file_size_mb` | 数字 | 当前流程只能填 `1..20` |
+| `only_file_sender_can_archive` | 复选框 | 默认不勾选 |
 
-多维表格节点返回的单行文本、超链接和多选字段不是同一种结构。调试时可能看到：
+当前测试记录应至少满足：
 
-```json
-{
-  "data": {
-    "items": [
-      {
-        "record_id": "recvpxvxQ61txd",
-        "fields": {
-          "chat_id": [
-            {
-              "text": "oc_ef1aa1409f9068ff12c892a42f32e73d",
-              "type": "text"
-            }
-          ],
-          "root_folder_name": [
-            {
-              "text": "测试文件夹",
-              "type": "text"
-            }
-          ],
-          "root_folder_url": {
-            "link": "https://xxx.feishu.cn/drive/folder/xxx",
-            "text": "https://xxx.feishu.cn/drive/folder/xxx",
-            "type": "url"
-          },
-          "allowed_file_types": [
-            "pdf",
-            "docx",
-            "md"
-          ],
-          "enabled": true
-        }
-      }
-    ],
-    "total": 1
-  }
-}
+```text
+enabled = true
+allowed_file_types = pdf, docx, xlsx, pptx, zip, md
+max_file_size_mb = 20
+only_file_sender_can_archive = false
 ```
 
-因此标准化节点应分别处理：
+`root_folder_token` 正确示例：
 
-| Base 字段形态 | 标准化方式 |
+```text
+SDiif2417lQWmidJfFMcDIyXn1e
+```
+
+不要填：
+
+```text
+https://xxx.feishu.cn/drive/folder/SDiif2417lQWmidJfFMcDIyXn1e?from=...
+```
+
+### 2.2 核对“归档请求”
+
+Table ID：
+
+```text
+tblyUgvj29jAL275
+```
+
+必须存在以下字段和类型：
+
+| 字段 | 类型 |
 |---|---|
-| `[{"text":"xxx","type":"text"}]` | 取第一项 `text` |
-| `{"link":"xxx","text":"xxx","type":"url"}` | 链接取 `link` |
-| `["pdf","docx","md"]` | 保留为扩展名数组并转小写 |
-| `true/false` | 保留布尔值 |
+| `request_id` | 单行文本，主字段 |
+| `chat_id` | 单行文本 |
+| `requester_id` | 单行文本 |
+| `trigger_message_id` | 单行文本 |
+| `candidate_files_json` | 多行文本 |
+| `source_message_id` | 单行文本 |
+| `source_type` | 单选：`message_file` |
+| `selected_file_id` | 单行文本 |
+| `selected_file_key` | 单行文本 |
+| `selected_file_name` | 单行文本 |
+| `selected_file_type` | 单行文本 |
+| `selected_file_size` | 数字，整数 |
+| `root_folder_token_snapshot` | 单行文本 |
+| `root_folder_name_snapshot` | 单行文本 |
+| `root_folder_url_snapshot` | URL |
+| `current_folder_token` | 单行文本 |
+| `current_folder_name` | 单行文本 |
+| `current_folder_url` | URL |
+| `folder_path_json` | 多行文本 |
+| `allowed_child_folders_json` | 多行文本 |
+| `target_folder_token` | 单行文本 |
+| `target_folder_name` | 单行文本 |
+| `target_folder_url` | URL |
+| `warning_message` | 多行文本 |
+| `status` | 单选，选项见下方 |
+| `expires_at` | 日期时间，精确到毫秒 |
+| `confirmed_at` | 日期时间，精确到毫秒 |
+| `result_file_token` | 单行文本 |
+| `result_file_url` | URL |
+| `result_size` | 数字，整数 |
+| `error_message` | 多行文本 |
+| `completed_at` | 日期时间，精确到毫秒 |
+| `created_at` | 系统创建时间 |
 
-不要因为标准化代码的最终输出字段为空，就反推多维表格没有查到记录。判断映射查询是否成功应直接看：
-
-```text
-items 数量
-total
-record_id
-fields.enabled
-```
-
-如果平台节点外层还有 `code/data/data/items`，代码节点应接收查询节点的完整输出并逐层解包，直到取得 `items`；不要手工复制一段被截断的 JSON 字符串。
-
-### 4.4 归档请求表
-
-| 字段 | 类型 | 创建时 | 用途 |
-|---|---|---|---|
-| `request_id` | 单行文本，主字段 | 写入 | 唯一请求编号 |
-| `chat_id` | 单行文本 | 写入 | 发起群 |
-| `requester_id` | 单行文本 | 写入 | 原发起人 open_id |
-| `trigger_message_id` | 单行文本 | 写入 | @机器人指令消息 |
-| `candidate_files_json` | 多行文本 | 写入 | 本次唯一文件候选快照 |
-| `source_message_id` | 单行文本 | 留空 | 用户确认后写入文件消息 ID |
-| `selected_file_id` | 单行文本 | 留空 | 用户确认后写入内部候选 ID |
-| `selected_file_key` | 单行文本 | 留空 | 用户确认后写入 file key |
-| `selected_file_name` | 单行文本 | 留空 | 用户确认后写入文件名 |
-| `selected_file_type` | 单行文本 | 留空 | 用户确认后写入扩展名 |
-| `root_folder_token_snapshot` | 单行文本 | 写入 | 请求创建时的根目录 |
-| `root_folder_name_snapshot` | 单行文本 | 写入 | 根目录名称 |
-| `root_folder_url_snapshot` | 超链接 | 写入 | 根目录链接 |
-| `current_folder_token` | 单行文本 | 写入根目录 | 当前浏览目录 |
-| `current_folder_name` | 单行文本 | 写入根目录名 | 当前浏览目录名 |
-| `current_folder_url` | 超链接 | 写入根目录链接 | 当前浏览目录链接 |
-| `folder_path_json` | 多行文本 | 写入根目录路径 | 面包屑和返回上级 |
-| `allowed_child_folders_json` | 多行文本 | 写 `[]` | 当前卡片允许进入的直属目录 |
-| `target_folder_token` | 单行文本 | 留空 | 最终确认目录 |
-| `target_folder_name` | 单行文本 | 留空 | 最终目录名 |
-| `target_folder_url` | 超链接 | 留空 | 最终目录链接 |
-| `warning_message` | 多行文本 | 按需 | 非阻断提醒 |
-| `status` | 单选 | `selecting_file` | 状态机 |
-| `expires_at` | 日期时间 | 写入 | 请求过期时间 |
-| `confirmed_at` | 日期时间 | 留空 | 最终确认时间 |
-| `result_file_token` | 单行文本 | 留空 | 上传结果 token |
-| `result_file_url` | 超链接 | 留空 | 上传结果链接 |
-| `result_size` | 数字 | 留空 | 上传字节数 |
-| `error_message` | 多行文本 | 留空 | 失败原因 |
-| `completed_at` | 日期时间 | 留空 | 完成时间 |
-
-状态值固定为：
+`status` 的单选值必须完全一致：
 
 ```text
 selecting_file
@@ -371,215 +210,106 @@ cancelled
 expired
 ```
 
+注意：
+
+- 字段名是工作流合同，不要改成中文。
+- URL 字段保持 URL 样式。
+- `request_id` 是主查询键。
+- `created_at` 由 Base 自动生成，创建记录节点不要给它赋值。
+- 精确“30 分钟过期”由工作流比较 `expires_at`，不要依赖视图。
+
+完成检查：
+
+- [ ] 当前群的映射查询结果恰好 1 条。
+- [ ] `allowed_file_types` 包含准备测试的扩展名。
+- [ ] 根目录 token、名称、URL 都非空。
+- [ ] “归档请求”字段和状态值已核对。
+
 ---
 
-## 5. 技能 B：先配置系统全局变量与开始节点自定义参数
+## 第 3 步：新建技能 B 的空壳
 
-技能名称建议：
+先建技能 B，因为所有交互卡片都需要它的 `skill_id`。
+
+1. 在 Aily 新建技能。
+2. 名称填：
 
 ```text
 处理文件归档卡片-V2
 ```
 
-### 5.1 先区分两类变量
-
-Aily 开始节点会同时展示两类变量：
-
-| 类型 | 由谁提供 | 本项目用途 |
-|---|---|---|
-| 系统全局变量 | Aily 自动提供 | `message.sender.openID` 用作卡片点击操作者；`query`、`session`、`channel` 用于上下文 |
-| 开始节点自定义参数 | 开发者声明，由卡片回调传入 | `request_id`、`action`、`selected_file_id`、`selected_folder_token` |
-
-不要把四个业务字段理解成“跨技能全局变量”。它们只是技能 B 本次运行的开始节点自定义参数；下一次卡片点击会启动新的技能 B 运行。
-
-### 5.2 B0 开始节点自定义参数
-
-技能 B 的开始节点声明以下自定义参数：
-
-| 参数名 | 类型 | 必填 | 默认值 | 来源 |
-|---|---|---:|---|---|
-| `request_id` | string | 是 | 空 | 回调对象的 `skill_input` |
-| `action` | string | 是 | 空 | 回调对象的 `skill_input` |
-| `selected_file_id` | string | 否 | 空 | 卡片 1 回调 |
-| `selected_folder_token` | string | 否 | 空 | 卡片 2 表单回调 |
-
-技能 B 的任何后续节点都不得直接引用：
+3. 技能描述填：
 
 ```text
-A5.xxx
-A8.xxx
-技能 A 的用户输入
-技能 A 的 chatHistory
-上一次技能 B 的节点输出
+处理文件归档确认卡片的点击回调。通过 request_id 从多维表格恢复状态，执行选文件、浏览目录、最终确认、上传或取消。
 ```
 
-### 5.3 自定义参数的传入方式
+4. 在开始节点添加四个自定义参数：
 
-固定参数放进按钮 `skill_input`：
+| 参数 | 类型 | 必填 | 默认值 |
+|---|---|---:|---|
+| `request_id` | string | 是 | 空 |
+| `action` | string | 是 | 空 |
+| `selected_file_id` | string | 否 | 空 |
+| `selected_folder_token` | string | 否 | 空 |
 
-```json
-{
-  "request_id": "archive_xxx",
-  "action": "choose_file",
-  "selected_file_id": "file_xxx"
-}
-```
-
-卡片 2 的目录下拉值在用户点击时才产生：
+5. 记住系统全局变量路径：
 
 ```text
-selected_folder_token
+本次点击人 open_id = message.sender.openID
 ```
 
-它必须满足：
-
-1. 卡片表单项标识是 `selected_folder_token`。
-2. 技能 B 开始节点存在同名自定义参数。
-3. 卡片请求回调将表单值自动传给这个同名自定义参数。
-
-不能只在卡片里创建表单项，却不在技能 B 声明参数。
-
-### 5.4 B0 最小回调测试
-
-正式搭 B 之前，先让开始节点后面只连接一个调试节点，输出：
-
-```json
-{
-  "request_id": "{{request_id}}",
-  "action": "{{action}}",
-  "selected_file_id": "{{selected_file_id}}",
-  "selected_folder_token": "{{selected_folder_token}}"
-}
-```
-
-分别点击卡片 1 和卡片 2，预期：
-
-卡片 1：
-
-```json
-{
-  "request_id": "archive_xxx",
-  "action": "choose_file",
-  "selected_file_id": "file_xxx",
-  "selected_folder_token": ""
-}
-```
-
-卡片 2“进入选中目录”：
-
-```json
-{
-  "request_id": "archive_xxx",
-  "action": "browse",
-  "selected_file_id": "",
-  "selected_folder_token": "fldcn_xxx"
-}
-```
-
-参数没打通之前，不继续搭业务节点。
-
-### 5.5 操作者身份
-
-技能 B 必须从本次卡片点击的系统全局变量取得：
+不要添加：
 
 ```text
-operator_id = message.sender.openID
+operator_open_id 自定义参数
+file_key 自定义参数
+folder_token 之外的目录状态参数
+技能 A 节点变量
 ```
 
-然后把 `operator_id` 传给 `b2_validate_callback.py`，与请求表中的 `requester_id` 比较。
+你在技能 A 的“工作流 B”节点里看到的上游变量选择器，只对“A 运行到该节点时直接调用 B”有效。本项目的 B 是由卡片点击启动，因此 B 开始节点仍只保留上面四个卡片参数；不要为了引用 A 的节点变量增加一批初始化参数。
 
-不要接受卡片自行提交的 `operator_open_id` 作为可信身份。卡片参数可以被重放或篡改。
+6. 开始节点后添加 Python 节点 `B0.1_当前时间`，完整复制：
+
+[common_now_ms.py](./aily_nodes/common_now_ms.py)
+
+该节点无输入，输出：
+
+```text
+now_ms = 当前 Unix 毫秒
+```
+
+7. 临时接一个文本/调试输出节点，输出：
+
+```json
+{
+  "request_id": "{{开始.request_id}}",
+  "action": "{{开始.action}}",
+  "selected_file_id": "{{开始.selected_file_id}}",
+  "selected_folder_token": "{{开始.selected_folder_token}}",
+  "operator_id": "{{message.sender.openID}}"
+}
+```
+
+8. 发布技能 B。
+9. 复制发布后的技能 ID，必须是：
+
+```text
+skill_xxx
+```
+
+把它记为：
+
+```text
+CALLBACK_SKILL_ID = skill_xxx
+```
+
+不要使用 `cli_xxx`、应用 ID、节点 ID或卡片模板 ID。
 
 ---
 
-## 6. 卡片回调总规则
-
-### 6.1 回调对象结构
-
-交互按钮使用“触发技能”对象，核心字段为：
-
-```json
-{
-  "x_aily_forbid_forward_callback": true,
-  "aily_action": "trigger_skill",
-  "skill_id": "skill_xxx",
-  "skill_input": "{\"request_id\":\"archive_xxx\",\"action\":\"cancel\"}",
-  "update_card": true,
-  "success_message": "已取消本次归档"
-}
-```
-
-规则：
-
-- `skill_id` 必须是已发布技能 B 的 `skill_xxx`。
-- 不是应用 ID、卡片模板 ID、节点 ID 或 `cli_xxx`。
-- `skill_input` 必须是合法 JSON 字符串，键名必须与技能 B 开始节点自定义参数一致。
-- 表单内产生的字段不要重复塞进 `skill_input`；Aily 会按组件名称自动传入。
-- 会推进状态的按钮统一使用 `update_card=true`，并填写明确的 `success_message`。
-- “发送飞书卡片”节点底部的 HTTP 回调保持为空。
-- 本项目没有自建公网回调服务。
-
-### 6.2 卡片编辑器与发送节点的完整绑定步骤
-
-每张交互卡片都按以下顺序配置：
-
-1. 在卡片搭建工具中选中按钮，打开“事件”。
-2. 点击时选择“请求回调”。
-3. 参数类型选择“对象”。
-4. 回传参数选择“绑定变量”。
-5. 新建或绑定对应对象变量，例如 `skill_object_choose_file`。
-6. 发布卡片。
-7. 回到 Aily 的“发送飞书卡片”节点，把卡片对象变量绑定到代码节点同名输出。
-8. 调试代码节点，让 Aily 自动解析 `main()` 返回对象结构，再确认所有命名输出均可选。
-9. 如果之后重新编辑并发布卡片，必须回到“发送飞书卡片”节点点击“更新”，否则工作流仍可能使用旧卡片版本。
-
-卡片 2 额外要求：下拉框和触发 `browse` 的按钮必须位于同一个表单容器内，下拉组件名称必须是 `selected_folder_token`。
-
-### 6.3 可以通过卡片传什么
-
-允许：
-
-```text
-request_id
-action
-selected_file_id
-selected_folder_token
-```
-
-不得作为可信状态直接传入：
-
-```text
-file_key
-source_message_id
-root_folder_token
-current_folder_name
-target_folder_token
-文件名
-目录名
-目录链接
-status
-requester_id
-```
-
-这些真实状态必须通过 `request_id` 从归档请求表恢复。
-
-### 6.4 人员变量
-
-交互卡片统一创建：
-
-```text
-变量名：initiator
-变量类型：人员
-模拟值：{"id":"ou_demo"}
-```
-
-人员变量不能创建成普通文本。
-
----
-
-## 7. 四张卡片
-
-### 7.1 卡片 1：确认文件
+## 第 4 步：创建卡片 1“确认文件”
 
 卡片名称：
 
@@ -587,58 +317,62 @@ requester_id
 归档-确认文件-V2
 ```
 
-本方案每次只有一个被明确回复的文件，因此卡片 1 不需要让智能体猜测，也不需要多候选下拉框。
+### 4.1 创建变量
 
-展示内容：
+| 变量名 | 类型 |
+|---|---|
+| `request_id_text` | 文本 |
+| `file_name` | 文本 |
+| `file_type` | 文本 |
+| `root_folder_name` | 文本 |
+| `initiator` | 人员 |
+| `skill_object_choose_file` | 对象 |
+| `skill_object_cancel` | 对象 |
+
+`initiator` 必须是人员变量，模拟值可填：
+
+```json
+{"id":"ou_demo"}
+```
+
+### 4.2 搭卡片内容
+
+正文：
 
 ```text
 待归档文件：{{file_name}}
 文件类型：{{file_type}}
-目标根目录：{{root_folder_name}}
+归档根目录：{{root_folder_name}}
+请求编号：{{request_id_text}}
 
-是否确认归档此文件？
+请确认是否归档这个文件。
 ```
 
-变量：
+按钮 1：
 
-| 变量 | 类型 | 来源 |
-|---|---|---|
-| `request_id_text` | 普通文本 | 技能 A 创建的 request_id |
-| `file_name` | 普通文本 | 文件消息解析结果 |
-| `file_type` | 普通文本 | 文件扩展名 |
-| `root_folder_name` | 普通文本 | 映射记录 |
-| `initiator` | 人员 | 发起人 open_id |
-| `skill_object_choose_file` | 对象 | 技能 A 组装 |
-| `skill_object_cancel` | 对象 | 技能 A 组装 |
-
-确认按钮的 `skill_input`：
-
-```json
-{
-  "request_id": "archive_xxx",
-  "action": "choose_file",
-  "selected_file_id": "file_xxx"
-}
+```text
+文案：确认归档这个文件
+事件：请求回调
+参数类型：对象
+绑定变量：skill_object_choose_file
 ```
 
-取消按钮：
+按钮 2：
 
-```json
-{
-  "request_id": "archive_xxx",
-  "action": "cancel"
-}
+```text
+文案：取消
+事件：请求回调
+参数类型：对象
+绑定变量：skill_object_cancel
 ```
 
-产品要求：
+发布卡片。
 
-- 只有一个文件也必须显示本卡片。
-- 技能 A 创建请求时不能提前填写 `selected_file_*`。
-- 只有用户点击“确认归档此文件”后，技能 B 才写入真实选中文件。
-- “确认归档此文件”和“取消”均绑定对象回调，使用 `update_card=true`。
-- 确认成功文案建议为“已确认文件，正在加载归档目录…”。
+注意：只有一个候选文件也必须经过这张卡片。
 
-### 7.2 卡片 2：选择目录
+---
+
+## 第 5 步：创建卡片 2“选择目录”
 
 卡片名称：
 
@@ -646,48 +380,90 @@ requester_id
 归档-选择目录-V2
 ```
 
-变量：
+### 5.1 创建变量
 
-| 变量 | 类型 | 来源 |
-|---|---|---|
-| `selected_file_name` | 普通文本 | 归档请求 |
-| `breadcrumb` | 普通文本 | `folder_path_json` |
-| `current_folder_url` | 普通文本或链接 | 归档请求 |
-| `warning` | 普通文本 | 归档请求 |
-| `initiator` | 人员 | 归档请求 requester_id |
-| `folder_options` | 选项数组 | 当前目录直属子文件夹 |
-| `disable_folder_browse` | 布尔 | 是否没有可进入子目录 |
-| `disable_back` | 布尔 | 当前是否为根目录 |
-| `skill_object_browse` | 对象 | `action=browse` |
-| `skill_object_back` | 对象 | `action=back` |
-| `skill_object_choose_current` | 对象 | `action=choose_current_folder` |
-| `skill_object_cancel` | 对象 | `action=cancel` |
-
-目录下拉框和“进入选中的文件夹”按钮必须放在同一个表单容器。
-
-| 配置 | 值 |
+| 变量名 | 类型 |
 |---|---|
-| 下拉表单项标识 | `selected_folder_token` |
-| 选项来源 | `folder_options` |
-| 下拉必填 | 是 |
-| 提交按钮 action | `browse` |
-| 技能 B 同名自定义参数 | `selected_folder_token` |
+| `selected_file_name` | 文本 |
+| `breadcrumb` | 文本 |
+| `current_folder_url` | 文本 |
+| `warning` | 文本 |
+| `initiator` | 人员 |
+| `folder_options` | 选项数组 |
+| `disable_folder_browse` | 布尔 |
+| `disable_back` | 布尔 |
+| `skill_object_browse` | 对象 |
+| `skill_object_back` | 对象 |
+| `skill_object_choose_current` | 对象 |
+| `skill_object_cancel` | 对象 |
 
-卡片外部按钮：
+### 5.2 搭卡片内容
 
-- 使用当前目录 → `choose_current_folder`
-- 返回上级 → `back`
-- 取消 → `cancel`
+显示：
 
-`browse`、`back`、`choose_current_folder`、`cancel` 均使用 `update_card=true` 和对应的 `success_message`。每次点击后由技能 B 发送一张新卡片 2 或卡片 3，旧卡片不继续承担状态。
+```text
+文件：{{selected_file_name}}
+当前位置：{{breadcrumb}}
+目录链接：{{current_folder_url}}
+提示：{{warning}}
+```
 
-空目录时：
+添加一个表单容器，在同一个表单容器内放：
 
-- 禁用下拉和“进入”。
-- 保留“使用当前目录”。
-- 不自动替用户选定目录。
+1. 目录下拉框。
+2. “进入选中的文件夹”提交按钮。
 
-### 7.3 卡片 3：最终确认
+下拉框配置：
+
+```text
+组件名称/表单项标识：selected_folder_token
+选项：绑定 folder_options
+必填：是
+禁用：绑定 disable_folder_browse
+```
+
+表单提交按钮：
+
+```text
+文案：进入选中的文件夹
+事件：请求回调
+参数类型：对象
+绑定：skill_object_browse
+禁用：绑定 disable_folder_browse
+```
+
+表单外再放三个按钮：
+
+| 按钮 | 绑定对象 | 禁用 |
+|---|---|---|
+| 使用当前目录 | `skill_object_choose_current` | 否 |
+| 返回上一级 | `skill_object_back` | `disable_back` |
+| 取消 | `skill_object_cancel` | 否 |
+
+这三个按钮都必须配置：
+
+```text
+事件 = 请求回调
+参数类型 = 对象
+回传参数 = 绑定上表对应对象变量
+```
+
+不要创建成仅跳转链接或无事件的普通按钮。
+
+发布卡片。
+
+关键检查：
+
+- [ ] 下拉框名称正好是 `selected_folder_token`。
+- [ ] 下拉框与进入按钮在同一表单容器。
+- [ ] 技能 B 开始节点存在同名参数。
+- [ ] 空目录时仅禁用“进入”，仍允许“使用当前目录”。
+
+---
+
+## 第 6 步：创建卡片 3 和卡片 4
+
+### 6.1 卡片 3“最终确认”
 
 卡片名称：
 
@@ -695,27 +471,52 @@ requester_id
 归档-最终确认-V2
 ```
 
-展示：
+变量：
+
+```text
+request_id_text        文本
+selected_file_name     文本
+selected_file_type     文本
+target_folder_path     文本
+target_folder_url      文本
+warning                文本
+initiator              人员
+skill_object_confirm   对象
+skill_object_return    对象
+skill_object_cancel    对象
+```
+
+正文：
 
 ```text
 文件：{{selected_file_name}}
+类型：{{selected_file_type}}
 目标目录：{{target_folder_path}}
 目录链接：{{target_folder_url}}
+提示：{{warning}}
 
-确认后将立即开始上传。
+确认后将立即上传。
 ```
 
 按钮：
 
-| 按钮 | action | `update_card` | 建议成功文案 |
-|---|---|---:|---|
-| 确认上传 | `confirm_upload` | `true` | 已提交归档，正在上传文件… |
-| 返回重新选择 | `return_folder` | `true` | 正在返回目录选择… |
-| 取消 | `cancel` | `true` | 已取消本次归档 |
+| 按钮 | 绑定对象 |
+|---|---|
+| 确认上传 | `skill_object_confirm` |
+| 返回重新选择 | `skill_object_return` |
+| 取消 | `skill_object_cancel` |
 
-卡片 3 不接收文件 key 或目录 token；显示和执行数据都从请求表恢复。
+三个按钮都配置：
 
-### 7.4 卡片 4：归档结果
+```text
+事件 = 请求回调
+参数类型 = 对象
+回传参数 = 绑定上表对应对象变量
+```
+
+发布卡片。
+
+### 6.2 卡片 4“归档结果”
 
 卡片名称：
 
@@ -723,327 +524,758 @@ requester_id
 归档-结果-V2
 ```
 
-展示：
+变量：
 
-- 成功或失败标题。
-- 文件名。
-- 目标目录。
-- 成功后的文件链接。
-- 失败时的可读错误。
-- 完成时间。
+```text
+is_success             布尔
+result_title           文本
+result_summary         文本
+request_id_text        文本
+selected_file_name     文本
+selected_file_type     文本
+target_folder_name     文本
+target_folder_path     文本
+target_folder_url      文本
+result_file_url        文本
+result_size_text       文本
+completed_at_text      文本
+error_message          文本
+initiator              人员
+```
 
-卡片 4 没有操作按钮，不再触发上传。
+正文至少展示：
+
+```text
+{{result_title}}
+{{result_summary}}
+文件：{{selected_file_name}}
+目标目录：{{target_folder_path}}
+文件链接：{{result_file_url}}
+文件大小：{{result_size_text}}
+完成时间：{{completed_at_text}}
+失败原因：{{error_message}}
+请求编号：{{request_id_text}}
+```
+
+卡片 4 不放任何回调按钮。发布卡片。
 
 ---
 
-## 8. 技能 A：从零搭建
+## 第 7 步：搭建技能 A 的开始和消息查询
 
-技能名称建议：
+新建技能：
 
 ```text
 发起文件归档-V2
 ```
 
-### A0：开始节点
+技能描述：
 
-至少取得：
+```text
+在群聊中，用户回复一条文件消息并 @机器人发送“归档”时，创建归档请求并发送文件确认卡片。
+```
 
-| 标准变量 | Aily 系统全局变量来源 | 校验 |
-|---|---|---|
-| `trigger_text` | `query` | 当前用户消息文字 |
-| `chat_id` | 优先 `session.sessionID`，也可核对 `channel.larkChannelInfo.chat_id` | 必须为 `oc_...` |
-| `trigger_message_id` | `message.channelInfo.message_id` | 必须为 `om_...` |
-| `requester_id` | `message.sender.openID` | 必须为 `ou_...` |
-| `chat_type` | `session.sessionType` | 必须为 `group` |
+### 7.0 把技能 A 挂到应用入口
 
-第一次调试时打开开始节点上方“变量”，保存真实结构并核对字段大小写。若当前租户版本字段路径有差异，以调试台实际结构为准，但不要改用 `messageHistory` 猜值。
+在 Aily 应用的“技能/能力”列表中添加 `发起文件归档-V2`，并在技能触发配置中选择飞书消息入口。群聊触发规则设置为：
 
-不要把以下值误当成 requester open_id：
+```text
+会话类型 = 群聊
+需要 @机器人 = 是
+触发词包含 = 归档
+目标技能 = 发起文件归档-V2
+```
 
-- 数字 sender id。
-- user_id。
-- union_id。
-- 机器人 open_id。
+如果当前 Aily 版本由主智能体根据技能描述路由，不提供单独的触发词表，则：
 
-### A1：确定性触发判断
+1. 将上面的技能描述原样填入技能触发描述。
+2. 在应用中启用该技能。
+3. 保留 A1 的确定性条件作为第二道校验。
+4. 不要在技能 A 内再添加意图分类智能体。
 
-不使用智能体节点。
+保存入口配置后立即做一次触发调试：
+
+```text
+在测试群回复任意消息并 @机器人发送“归档”
+```
+
+此时即使被回复内容不是文件，技能 A 的 A0 也必须出现一条新运行记录，并能看到 `chat_id / trigger_message_id / requester_id`。A0 没运行就先修应用入口，不继续搭后续节点。
+
+### 7.1 A0 开始节点
+
+从系统全局变量取值：
+
+| 本文简称 | Aily 系统变量 |
+|---|---|
+| `trigger_text` | `query` |
+| `chat_id` | 优先 `channel.larkChannelInfo.chat_id`；有标准变量时也可用 `channel.variables.chat_id` |
+| `trigger_message_id` | `message.channelInfo.message_id` |
+| `requester_id` | `message.sender.openID` |
+| `chat_type` | `session.sessionType` |
+
+第一次调试时核对真实值：
+
+```text
+chat_id 以 oc_ 开头
+trigger_message_id 以 om_ 开头
+requester_id 以 ou_ 开头
+chat_type = group
+```
+
+若租户界面路径略有不同，以开始节点调试输出为准。不要使用 `session.sessionID` 充当 `chat_id`：日志里它可能是数字会话 ID，不是 `oc_...`。A2.1 还会从真实触发消息中再次取得并校验 `chat_id`。
+
+在开始节点后添加 Python 节点 `A0.1_当前时间`，复制：
+
+[common_now_ms.py](./aily_nodes/common_now_ms.py)
+
+后续所有时间都绑定 `A0.1.now_ms`，不要手工填写旧时间戳。
+
+### 7.2 A1 条件节点“是否为归档指令”
 
 继续条件：
 
-1. `chat_type=group`。
-2. 当前消息明确 @了归档机器人。
-3. `trigger_text` 包含允许的指令词，例如 `归档`、`存档`。
-4. `chat_id`、`trigger_message_id`、`requester_id` 均非空。
-
-不建议只用 `final` 判断归档，因为普通讨论中也可能出现该词。
-
-失败时输出对应原因并结束。
-
-### A2：查询当前触发消息
-
-使用 `trigger_message_id` 查询这条消息本身，不获取整段群聊历史。
-
-需要得到：
-
 ```text
-message_id
-chat_id
-parent_id
-root_id
-sender.id
-msg_type
+chat_type == group
+chat_id 非空
+trigger_message_id 非空
+requester_id 非空
+trigger_text 包含 归档
 ```
 
-校验：
-
-- 返回消息的 `message_id` 等于 `trigger_message_id`。
-- 返回消息的 `chat_id` 等于开始节点 `chat_id`。
-- 返回消息的发送者等于 `requester_id`。
-- `parent_id` 非空。
-
-如果 `parent_id` 为空：
+不满足时发送：
 
 ```text
-error_code: NOT_REPLY_TO_MESSAGE
-error: 请回复需要归档的文件消息，并 @机器人发送“归档”。
+请在群里回复需要归档的文件消息，并 @机器人发送“归档”。
 ```
 
-### A3：查询被回复消息
+然后结束。
 
-按触发消息的 `parent_id` 查询被回复消息。
+不要添加大模型或智能体节点。
 
-严格规则：
+### 7.3 A2 获取触发消息
 
-- 被回复消息必须 `msg_type=file`。
-- 被回复消息不能已删除或撤回。
-- 被回复消息必须与触发消息属于同一个 `chat_id`。
-- 默认允许发起人归档群内其他成员发送的文件。
-- 只有映射记录 `only_file_sender_can_archive=true` 时，才要求文件发送者与归档发起人相同。
+添加“获取指定消息”节点：
 
-如果 `parent_id` 对应的不是文件，不要继续使用 `root_id` 猜测文件；提示用户直接回复文件消息。
+```text
+message_id = A0.trigger_message_id
+```
 
-预期文件内容：
+需要保留节点完整输出，后续代码节点整体接收，不要只复制一段 JSON 文本。
+
+在 A2 后添加 Python 节点，命名：
+
+```text
+A2.1_标准化触发消息参数
+```
+
+复制完整文件：
+
+[a2_normalize_trigger_message.py](./aily_nodes/a2_normalize_trigger_message.py)
+
+输入绑定：
+
+| `main()` 参数 | 绑定值 |
+|---|---|
+| `message_result` | A2 完整输出 |
+| `expected_message_id` | A0 `trigger_message_id` |
+
+成功输出必须是：
+
+```text
+ok = true
+message_id = om_xxx
+parent_id = om_xxx
+chat_id = oc_xxx
+chat_id_filter_values = ["oc_xxx"]   ← 真实字符串数组
+sender_id = ou_xxx
+```
+
+`chat_id_filter_values` 专门用于多维表格查询节点的筛选 `value`。不要把 `chat_id` 字符串直接绑定给筛选 `value`。
+
+### 7.4 A3 获取被回复消息
+
+先在 A2.1 后添加条件节点：
+
+```text
+A2.1.ok == false → 发送 A2.1.error 并结束
+A2.1.ok == true 且 A2.1.parent_id 非空 → 继续查询被回复消息
+A2.1.ok == true 且 A2.1.parent_id 为空 → 发送下方提示并结束
+```
+
+提示：
+
+```text
+请回复需要归档的文件消息，并 @机器人发送“归档”。
+```
+
+再添加一个“获取指定消息”节点：
+
+```text
+message_id = A2.1 输出的 parent_id
+```
+
+不要使用 `root_id` 回退猜文件。
+
+---
+
+## 第 8 步：技能 A 查询群目录映射
+
+添加“查询多维表格记录”节点，命名：
+
+```text
+A4_查询群目录映射
+```
+
+参数：
+
+```text
+Base App Token = WHaibyXvuaXuJpsDraJcAAM9nIb
+Table ID       = tblacRVYZZ4SJmWW
+View ID        = vewPOqHrk9
+page_size      = 2
+```
+
+筛选：
+
+```text
+字段       = chat_id
+operator   = is
+value      = A2.1.chat_id_filter_values
+```
+
+这里不要在查询节点里手工构造数组。把整个筛选 `value` 绑定到 A2.1 的 `chat_id_filter_values`；这个 Python 输出本身就是字符串数组。
+
+正确的运行时输入：
 
 ```json
 {
-  "message_id": "om_xxx",
-  "msg_type": "file",
-  "body": {
-    "content": "{\"file_key\":\"file_v3_xxx\",\"file_name\":\"项目终版.md\"}"
+  "field_name": "chat_id",
+  "operator": "is",
+  "value": ["oc_xxx"]
+}
+```
+
+错误输入：
+
+```json
+{
+  "field_name": "chat_id",
+  "operator": "is",
+  "value": "oc_xxx"
+}
+```
+
+如果错误地传字符串，Aily 的该连接器可能直接输出 `code/data/message = NULL`，这不是“查询结果为 0 条”，而是筛选参数类型校验失败。`View ID` 可以继续填写，但它不是本次 `NULL` 的原因。
+
+不要按 `chat_name` 查询。
+
+调试预期：
+
+```text
+total = 1
+fields.enabled = true
+fields.root_folder_token 非空
+fields.allowed_file_types 包含测试文件扩展名
+```
+
+---
+
+## 第 9 步：技能 A 创建请求
+
+### 9.1 A5 代码节点“生成归档请求”
+
+新增 Python 代码节点，把以下文件完整复制进去：
+
+[a7_build_archive_request.py](./aily_nodes/a7_build_archive_request.py)
+
+不要只复制 `main()`，要复制整个文件。
+
+输入参数绑定：
+
+| `main()` 参数 | 绑定值 |
+|---|---|
+| `mapping_result` | `A4_查询群目录映射`完整输出 |
+| `trigger_message_result` | A2 完整输出 |
+| `replied_message_result` | A3 完整输出 |
+| `chat_id` | A2.1 `chat_id` |
+| `requester_id` | A0 `requester_id` |
+| `trigger_message_id` | A0 `trigger_message_id` |
+| `trigger_text` | A0 `trigger_text` |
+| `now_ms` | `A0.1_当前时间.now_ms` |
+
+先调试代码节点，让 Aily 自动识别返回字段。
+
+成功必须看到：
+
+```text
+ok = true
+request_id = archive_xxx
+candidate_count = 1
+initial_status = selecting_file
+selected_file_id = 空
+selected_file_key = 空
+selected_file_name = 空
+folder_path_json = [{"token":"根目录..."}]
+expires_at_ms = 当前时间 + 30 分钟
+```
+
+### 9.2 A6 条件节点
+
+```text
+如果 A5.ok == true  → 继续
+如果 A5.ok == false → 发送 A5.error → 结束
+```
+
+失败文案必须绑定 `A5.error`，不能写死“没有目录映射”。
+
+### 9.3 A7 创建“归档请求”记录
+
+添加“创建多维表格记录”节点：
+
+```text
+Base App Token = WHaibyXvuaXuJpsDraJcAAM9nIb
+Table ID       = tblyUgvj29jAL275
+```
+
+字段绑定：
+
+| Base 字段 | 值 |
+|---|---|
+| `request_id` | `A5.request_id` |
+| `chat_id` | `A5.chat_id` |
+| `requester_id` | `A5.requester_id` |
+| `trigger_message_id` | `A5.trigger_message_id` |
+| `candidate_files_json` | `A5.candidate_files_json` |
+| `root_folder_token_snapshot` | `A5.root_folder_token` |
+| `root_folder_name_snapshot` | `A5.root_folder_name` |
+| `root_folder_url_snapshot` | `A5.root_folder_url_object`，类型必须是 object |
+| `current_folder_token` | `A5.root_folder_token` |
+| `current_folder_name` | `A5.root_folder_name` |
+| `current_folder_url` | `A5.current_folder_url_object`，类型必须是 object |
+| `folder_path_json` | `A5.folder_path_json` |
+| `allowed_child_folders_json` | 固定 `[]` |
+| `warning_message` | `A5.warning` |
+| `status` | 固定 `selecting_file` |
+| `expires_at` | `A5.expires_at_ms` |
+
+保存节点后刷新一次数据表字段列表，并在运行输入中做以下硬性检查：
+
+```text
+必须出现：trigger_message_id
+不得出现：property1
+expires_at 必须显示为 int/number，而不是 string
+```
+
+字段名必须从节点刷新后的 Base 字段列表中点选，不要复制粘贴或手工输入。Aily 的运行输入预览可能不会显示字段名末尾的 Tab、空格等不可见字符；必须以错误详情中单引号内的原始字段名为准。例如：
+
+```text
+fields.allowed_child_folders_json\t
+```
+
+并不是 `allowed_child_folders_json`，而是末尾多了一个 Tab，会返回 `1254045 FieldNameNotFound`。修复方式是删除整行字段绑定，再从字段列表重新选择真实字段；不要只在原输入框末尾按退格。
+
+如果运行输入出现：
+
+```text
+"property1": "om_xxx"
+```
+
+说明添加字段时没有从 Base 字段列表中选中真实的 `trigger_message_id`，Aily 把该行保留成了默认字段名。删除这一行，刷新节点的数据表字段，再重新选择：
+
+```text
+trigger_message_id = A5.trigger_message_id
+```
+
+`expires_at` 是 Base 日期时间字段。飞书新增记录接口要求毫秒级时间戳数字，因此 A5 输出结构中的 `expires_at_ms` 必须声明为 `integer/number`。正确运行输入：
+
+```text
+"expires_at": 1785251887940
+```
+
+错误运行输入：
+
+```text
+"expires_at": "1785251887940"
+```
+
+`root_folder_url_snapshot` 和 `current_folder_url` 是 Base 超链接字段。仅把创建节点左侧的参数类型改为 `object` 不会转换右侧变量；如果右侧仍绑定 `A5.root_folder_url`，运行时得到的仍是字符串。
+
+重新复制最新版 `a7_build_archive_request.py`，调试 A5 后确认新增两个 object 输出：
+
+```json
+{
+  "root_folder_url_object": {
+    "text": "测试文件夹",
+    "link": "https://xxx.feishu.cn/drive/folder/xxx"
+  },
+  "current_folder_url_object": {
+    "text": "测试文件夹",
+    "link": "https://xxx.feishu.cn/drive/folder/xxx"
   }
 }
 ```
 
-### A4：标准化文件信息
+创建记录节点右侧必须分别绑定这两个 object 输出，不再绑定字符串 `root_folder_url`。正确运行输入中应看到嵌套对象；如果 `fieldValue` 后面直接跟 `https://...`，说明仍绑定错了。
 
-输出：
-
-| 输出 | 说明 |
-|---|---|
-| `file_message_id` | 被回复文件消息 ID |
-| `file_key` | 文件资源 key |
-| `file_name` | 文件名 |
-| `file_type` | 小写扩展名，不带点 |
-| `file_sender_id` | 文件发送者 open_id |
-| `file_size` | 能取得则填写，不能取得填 0 |
-| `candidate_file_id` | 内部候选 ID |
-
-内部候选 ID 可以由文件消息 ID 派生，但不能使用文件名：
-
-```text
-file_<message_id 后若干位>
-```
-
-文件名为 `项目终版.md` 时：
-
-```text
-file_type = md
-```
-
-没有扩展名时按配置错误或不支持类型处理，不要自动猜测。
-
-### A5：查询群目录映射
-
-查询条件只能是：
-
-```text
-chat_id is {{A0.chat_id}}
-```
-
-建议：
-
-```text
-page_size = 2
-```
-
-必须区分以下结果：
-
-| 情况 | error_code | 文案 |
-|---|---|---|
-| 0 条 | `MAPPING_NOT_FOUND` | 当前群未配置归档目录 |
-| 大于 1 条 | `MAPPING_DUPLICATED` | 当前群存在重复映射，请管理员处理 |
-| `enabled=false` | `MAPPING_DISABLED` | 当前群归档功能未启用 |
-| 根 token 为空 | `ROOT_FOLDER_MISSING` | 群目录映射缺少根目录 token |
-| 根目录名称为空 | `ROOT_FOLDER_NAME_MISSING` | 群目录映射缺少根目录名称 |
-| 根目录链接为空 | `ROOT_FOLDER_URL_MISSING` | 群目录映射缺少根目录链接 |
-| 类型白名单为空 | `FILE_TYPE_CONFIG_EMPTY` | 群目录映射未配置允许的文件类型 |
-
-成功后输出：
-
-```text
-mapping_record_id
-chat_name
-root_folder_token
-root_folder_name
-root_folder_url
-allowed_file_types
-max_file_size_mb
-only_file_sender_can_archive
-```
-
-### A6：校验文件
-
-依次校验：
-
-1. `file_key` 非空。
-2. `file_name` 非空。
-3. `file_type` 在 `allowed_file_types` 中。
-4. 能取得文件大小时，不超过 `max_file_size_mb`。
-5. 当前普通上传流程要求 `max_file_size_mb` 在 `1..20`；超过 20 直接返回 `FILE_SIZE_CONFIG_UNSUPPORTED`。
-
-类型不允许时必须输出：
-
-```text
-error_code: FILE_TYPE_NOT_ALLOWED
-error: 当前文件类型 .md 不在本群允许归档的类型中
-```
-
-不要输出“没有找到目录映射”。
-
-如果消息查询不能提供文件大小，允许先继续，但在实际下载后必须重新校验真实字节数；空文件或超过 20 MB 的文件停止上传。
-
-### A7：生成请求快照
-
-代码：[`aily_nodes/a7_build_archive_request.py`](./aily_nodes/a7_build_archive_request.py)
-
-该节点接收映射查询、触发消息查询、被回复消息查询的完整输出，同时完成确定性校验和请求快照生成。它不接收群聊历史。
-
-生成：
-
-```text
-request_id = archive_<随机唯一值>
-status = selecting_file
-expires_at = 当前时间 + 30 分钟
-```
-
-`candidate_files_json` 即使只有一个文件也保持数组结构：
-
-```json
-[
-  {
-    "id": "file_xxx",
-    "file_key": "file_v3_xxx",
-    "file_name": "项目终版.md",
-    "file_type": "md",
-    "message_id": "om_xxx",
-    "sender_id": "ou_xxx",
-    "file_size": 0,
-    "source_type": "replied_message_file"
-  }
-]
-```
-
-`folder_path_json` 初始值：
-
-```json
-[
-  {
-    "token": "根目录token",
-    "name": "根目录名称",
-    "url": "根目录链接"
-  }
-]
-```
-
-### A8：创建归档请求记录
-
-创建时写入：
-
-| 字段 | 值 |
-|---|---|
-| `request_id` | A7 request_id |
-| `chat_id` | A0 chat_id |
-| `requester_id` | A0 requester_id |
-| `trigger_message_id` | A0 trigger_message_id |
-| `candidate_files_json` | A7 candidate_files_json |
-| `root_folder_token_snapshot` | A7 root_folder_token |
-| `root_folder_name_snapshot` | A7 root_folder_name |
-| `root_folder_url_snapshot` | A7 root_folder_url |
-| `current_folder_token` | A7 root_folder_token |
-| `current_folder_name` | A7 root_folder_name |
-| `current_folder_url` | A7 root_folder_url |
-| `folder_path_json` | A7 folder_path_json |
-| `allowed_child_folders_json` | `[]` |
-| `status` | `selecting_file` |
-| `expires_at` | A7 expires_at |
-
-以下字段必须留空：
+创建时以下字段必须留空：
 
 ```text
 source_message_id
+source_type
 selected_file_id
 selected_file_key
 selected_file_name
 selected_file_type
+selected_file_size
 target_folder_token
 target_folder_name
 target_folder_url
+confirmed_at
+result_file_token
+result_file_url
+result_size
+error_message
+completed_at
 ```
 
-这条规则保证“只有一个文件也必须先确认”。
-
-### A9：发送卡片 1
-
-代码：[`aily_nodes/a9_build_file_confirm_card.py`](./aily_nodes/a9_build_file_confirm_card.py)
-
-卡片展示 A7 标准化后的文件信息和根目录名称。
-
-确认按钮携带：
-
-```json
-{
-  "request_id": "A7.request_id",
-  "action": "choose_file",
-  "selected_file_id": "A7.candidate_file_id"
-}
-```
-
-取消按钮携带：
-
-```json
-{
-  "request_id": "A7.request_id",
-  "action": "cancel"
-}
-```
-
-卡片发出后技能 A 结束。
+这是“即使一个文件也必须先确认”的实现点。
 
 ---
 
-## 9. 技能 B：每次点击的固定入口
+## 第 10 步：技能 A 发送卡片 1
 
-### B1：校验开始参数
+### 10.1 A8 代码节点“组装文件确认卡片”
 
-每次运行首先校验：
+复制完整文件：
+
+[a9_build_file_confirm_card.py](./aily_nodes/a9_build_file_confirm_card.py)
+
+输入绑定：
+
+| 参数 | 值 |
+|---|---|
+| `candidate_files_json` | `A5.candidate_files_json` |
+| `request_id` | `A5.request_id` |
+| `callback_skill_id` | 第 3 步取得的 `skill_xxx` |
+| `requester_id` | `A5.requester_id` |
+| `root_folder_name` | `A5.root_folder_name` |
+
+调试成功：
 
 ```text
-request_id 非空
-action 在允许集合中
+ok = true
+skill_object_choose_file.skill_id = skill_xxx
+skill_object_choose_file.skill_input 包含 request_id、action=choose_file、selected_file_id
+skill_object_cancel.skill_input 包含 request_id、action=cancel
 ```
 
-允许 action：
+### 10.2 A9 条件节点
+
+```text
+A8.ok == true  → 发卡片
+A8.ok == false → 更新 A7 请求为 failed，写入 A8.error 和 completed_at
+               → 发送 A8.error → 结束
+```
+
+失败更新使用：
+
+```text
+record_id     = A7 创建记录节点返回的 record_id
+status        = failed
+error_message = A8.error
+completed_at  = A0.1_当前时间.now_ms
+```
+
+### 10.3 A10 发送飞书卡片
+
+选择第 4 步发布的：
+
+```text
+归档-确认文件-V2
+```
+
+绑定：
+
+| 卡片变量 | A8 输出 |
+|---|---|
+| `request_id_text` | `request_id_text` |
+| `file_name` | `file_name` |
+| `file_type` | `file_type` |
+| `root_folder_name` | `root_folder_name` |
+| `initiator` | `initiator` |
+| `skill_object_choose_file` | `skill_object_choose_file` |
+| `skill_object_cancel` | `skill_object_cancel` |
+
+发送节点底部 HTTP 回调地址留空。
+
+如果发送节点要求填写接收会话：
+
+```text
+接收类型 = 群聊
+chat_id = A5.chat_id
+```
+
+不要把卡片里的文本变量当接收人。
+
+若 A10 发送卡片失败，同样使用 A7 返回的 `record_id` 将请求更新为
+`failed`，`error_message` 写发送节点的真实错误，`completed_at` 写
+`A0.1_当前时间.now_ms`，然后结束。
+
+卡片发出后，技能 A 直接结束。技能 A 不等待技能 B。
+
+不要在 A10 后面添加“工作流 B”节点。该节点会在卡片发送后立即调用 B，并不会等用户点击。
+
+真正的 A → B 连接已经包含在 A8 输出的卡片按钮对象中：
+
+```text
+aily_action = trigger_skill
+skill_id = 技能 B 的 skill_xxx
+skill_input = {
+  "request_id": "A5.request_id",
+  "action": "choose_file 或 cancel",
+  "selected_file_id": "确认按钮才携带"
+}
+```
+
+这里的值由 A8 代码节点在运行时生成，不要在卡片编辑器里手写某一次测试的真实 `request_id`。
+
+### 10.4 立即测试 A
+
+在测试群：
+
+1. 发送一个小于 20 MB 的 `.md` 文件。
+2. 回复该文件消息。
+3. @机器人发送：
+
+```text
+归档
+```
+
+预期：
+
+- Base 新增一条 `selecting_file` 请求。
+- `selected_file_*` 为空。
+- 群里出现卡片 1。
+- 点击“确认归档这个文件”会启动技能 B。
+- 技能 B 调试入口收到 `request_id/action/selected_file_id`。
+
+如果 B 没收到参数，先修卡片回调，不继续搭后续分支。
+
+---
+
+## 第 11 步：搭建技能 B 的公共入口
+
+删除第 3 步的临时调试输出，开始正式搭建。
+
+先理解技能 B 的运行方式：用户每点击一次卡片，就新启动一次技能 B；本次运行只处理这一次点击，然后结束。下一次点击会再次从 B0 开始。
+
+```text
+B0 读取本次点击参数
+→ B1 按 request_id 查 Base
+→ B2 校验点击是否合法
+→ 条件分支判断 action
+→ 只执行对应的一条业务分支
+→ 发下一张卡片或结束
+```
+
+因此“分支”表示工作流画布上的不同连线，不代表同时执行所有 action。
+
+### 11.1 B1 查询归档请求
+
+把公共入口按下面顺序连接：
+
+```text
+B0 开始 → B0.1_当前时间 → B0.2_生成请求筛选数组
+        → B0.3_筛选参数校验 → B1_查询归档请求
+```
+
+先添加 Python 节点：
+
+```text
+B0.2_生成请求筛选数组
+```
+
+复制完整文件：
+
+[b0_prepare_request_filter.py](./aily_nodes/b0_prepare_request_filter.py)
+
+输入绑定：
+
+```text
+request_id = 开始.request_id
+```
+
+调试输出必须是：
+
+```text
+request_id = archive_xxx
+request_id_filter_values = ["archive_xxx"]
+```
+
+开始节点的 `request_id` 必须继续保持 `string`；卡片传字符串是正确的。B0.2 只为 Base 查询连接器额外生成数组形式。
+
+在 B0.2 后添加“条件分支”节点：
+
+```text
+节点名 = B0.3_筛选参数校验
+
+B0.2.ok == false → 发送 B0.2.error → 结束
+B0.2.ok == true  → B1_查询归档请求
+```
+
+不要让空数组继续进入 Base 查询节点。
+
+添加“查询多维表格记录”节点：
+
+```text
+Base App Token = WHaibyXvuaXuJpsDraJcAAM9nIb
+Table ID       = tblyUgvj29jAL275
+page_size      = 2
+筛选字段         = request_id
+operator         = is
+value             = B0.2.request_id_filter_values
+```
+
+不要绑定数组中的第 0 项，否则又会退化成字符串。把整个筛选 `value` 绑定到 `request_id_filter_values`。运行时应为 `"value":["archive_xxx"]`，不能是 `"value":"archive_xxx"`。
+
+### 11.2 B2 代码节点“校验回调”
+
+复制完整文件：
+
+[b2_validate_callback.py](./aily_nodes/b2_validate_callback.py)
+
+输入绑定：
+
+| 参数 | 值 |
+|---|---|
+| `request_result` | B1 完整输出 |
+| `request_id` | 开始节点 `request_id` |
+| `action` | 开始节点 `action` |
+| `operator_id` | 系统变量 `message.sender.openID` |
+| `selected_file_id` | 开始节点 `selected_file_id` |
+| `selected_folder_token` | 开始节点 `selected_folder_token` |
+| `now_ms` | `B0.1_当前时间.now_ms` |
+
+### 11.3 B3 添加“条件分支”节点，处理 B2 成功或失败
+
+本文后面说的“路由”不是一个特殊节点，而是 Aily 的**条件分支节点**。它的作用只是根据某个变量的值，把连线分到不同出口。
+
+在 B2 后添加一个“条件分支”节点，命名：
+
+```text
+B3_校验结果分支
+```
+
+按下面顺序建立三个出口。若界面提供“且/AND”，同一出口内的条件使用 AND。
+
+#### 出口 1：`已过期`
+
+```text
+左值 1 = B2.ok
+运算符 = 等于
+右值 1 = false（布尔值，不是字符串）
+
+AND
+
+左值 2 = B2.error_code
+运算符 = 等于
+右值 2 = REQUEST_EXPIRED
+```
+
+连接到“更新多维表格记录”节点：
+
+```text
+record_id     = B2.request_record_id
+status        = expired
+error_message = B2.error
+completed_at  = B0.1_当前时间.now_ms
+```
+
+更新成功后发送文本：
+
+```text
+{{B2.error}}
+```
+
+然后连接结束节点。
+
+#### 出口 2：`其他失败`
+
+```text
+左值 1 = B2.ok
+运算符 = 等于
+右值 1 = false
+
+AND
+
+左值 2 = B2.error_code
+运算符 = 不等于
+右值 2 = REQUEST_EXPIRED
+```
+
+连接“发送消息”节点，内容绑定 `B2.error`，然后结束。不要在该分支更新请求状态，因为操作者错误、伪造 action 或旧卡片重复点击不应该覆盖原状态。
+
+#### 出口 3：`校验成功`
+
+```text
+左值 = B2.ok
+运算符 = 等于
+右值 = true（布尔值）
+```
+
+连接下一节的 `B3.1_action分支`。
+
+如果条件节点按“从上到下第一条命中”执行，务必保持顺序：
+
+```text
+已过期 → 其他失败 → 校验成功
+```
+
+B2 的作用只是校验，不更新 Base。它已经检查请求唯一、点击人、状态、有效期、根目录边界和卡片选项白名单。
+
+### 11.4 B3.1 再添加一个“条件分支”节点，按 action 分流
+
+在“校验成功”出口后再添加一个条件分支节点，命名：
+
+```text
+B3.1_action分支
+```
+
+建立七个出口。每个出口都使用：
+
+```text
+左值 = B2.action
+运算符 = 等于
+右值 = 下表固定字符串
+```
+
+| 出口名称 | 右值 | 接到哪里 |
+|---|---|---|
+| 确认文件 | `choose_file` | B4_准备状态更新 |
+| 进入子目录 | `browse` | B4_准备状态更新 |
+| 返回上级 | `back` | B4_准备状态更新 |
+| 使用当前目录 | `choose_current_folder` | B4_准备状态更新 |
+| 返回选目录 | `return_folder` | B4_准备状态更新 |
+| 取消 | `cancel` | B4_准备状态更新 |
+| 确认上传 | `confirm_upload` | 第 15 步上传分支，不经过 B4 |
+
+如果 Aily 不允许六条出口汇入同一个 B4 节点，就复制六个相同的 B4 代码节点，分别命名为 `B4_choose_file`、`B4_browse` 等；每个节点的代码和输入完全相同。不要用智能体节点判断 action。
+
+---
+
+## 第 12 步：添加 B4 状态转换代码
+
+新增一个 Python 代码节点，命名：
+
+```text
+B4_准备状态更新
+```
+
+复制完整文件：
+
+[b3_prepare_action.py](./aily_nodes/b3_prepare_action.py)
+
+该节点用于六个非上传 action：
 
 ```text
 choose_file
@@ -1051,573 +1283,853 @@ browse
 back
 choose_current_folder
 return_folder
-confirm_upload
 cancel
 ```
 
-未知 action 立即结束：
+输入绑定：
 
-```text
-INVALID_ACTION
-```
-
-### B2：按 request_id 恢复请求
-
-公共恢复与校验代码：[`aily_nodes/b2_validate_callback.py`](./aily_nodes/b2_validate_callback.py)
-
-查询条件：
-
-```text
-request_id is {{B0.request_id}}
-```
-
-`page_size=2`，并要求恰好 1 条。
-
-每次都恢复完整记录，不依赖上一次技能运行：
-
-```text
-requester_id
-candidate_files_json
-selected_file_*
-source_message_id
-root_folder_*_snapshot
-current_folder_*
-folder_path_json
-allowed_child_folders_json
-target_folder_*
-status
-expires_at
-```
-
-### B3：公共安全校验
-
-每次 action 前检查：
-
-1. 请求存在且唯一。
-2. 请求未过期。
-3. 当前操作者等于 `requester_id`。
-4. 当前状态允许本次 action。
-5. 根路径仍以 `root_folder_token_snapshot` 开始。
-
-action 与状态：
-
-| action | 允许状态 |
+| 参数 | 值 |
 |---|---|
-| `choose_file` | `selecting_file` |
-| `browse` | `selecting_folder` |
-| `back` | `selecting_folder` |
-| `choose_current_folder` | `selecting_folder` |
-| `return_folder` | `waiting_confirm` |
-| `confirm_upload` | `waiting_confirm` |
-| `cancel` | `selecting_file`、`selecting_folder`、`waiting_confirm` |
+| `action` | `B2.action` |
+| `request_json` | `B2.request_json` |
+| `selected_candidate_json` | `B2.selected_candidate_json` |
+| `selected_folder_json` | `B2.selected_folder_json` |
+| `now_ms` | `B0.1_当前时间.now_ms` |
 
-终态请求不能再次操作：
+六个非上传出口连接到 B4。B4 后添加“条件分支”节点，命名：
 
 ```text
-processing
-success
-failed
-cancelled
-expired
+B4.1_B4结果分支
+```
+
+两个出口：
+
+```text
+出口“成功”：B4.ok 等于 true
+出口“失败”：B4.ok 等于 false
+```
+
+失败出口发送 `B4.error` 后结束。成功出口再添加一个条件分支节点：
+
+```text
+B4.2_next_step分支
+```
+
+按 `B4.next_step` 建立三个出口：
+
+| 条件 | 含义 | 接到哪里 |
+|---|---|---|
+| `B4.next_step == list_folder` | 需要显示目录卡片 | 第 13 步目录处理 |
+| `B4.next_step == send_confirm_card` | 已选择目标目录 | 第 14.1 步最终确认 |
+| `B4.next_step == end` | 已取消 | 第 14.2 步取消落库 |
+
+为什么还要看 `next_step`：`B2.action` 是用户点了什么，`B4.next_step` 是代码校验并转换状态后下一步真正要做什么。两者不要混用。
+
+B4 会输出两套 URL：
+
+```text
+current_folder_url          字符串，只给卡片展示
+current_folder_url_object   object，只写 Base URL 字段
+target_folder_url           字符串，只给卡片展示
+target_folder_url_object    object，只写 Base URL 字段
 ```
 
 ---
 
-## 10. 技能 B：action 分支
+## 第 13 步：搭建目录选择相关分支
 
-### 10.1 choose_file
-
-入口参数：
+从 `B4.2_next_step分支` 的 `list_folder` 出口开始搭建。先添加一个条件分支节点：
 
 ```text
-request_id
-action=choose_file
-selected_file_id
+B4.3_目录动作分支
 ```
 
-步骤：
-
-1. 解析 `candidate_files_json`。
-2. 按 `selected_file_id` 查找唯一候选。
-3. 不使用卡片提交的文件名或 file key。
-4. 从候选快照恢复真实文件信息。
-5. 更新请求：
+左值统一选择 `B2.action`，分别建立四个出口：
 
 ```text
-source_message_id
-selected_file_id
-selected_file_key
-selected_file_name
-selected_file_type
-status = selecting_folder
+choose_file
+browse
+back
+return_folder
 ```
 
-6. 读取根目录直属子文件夹。
-7. 保存 `allowed_child_folders_json`。
-8. 发送卡片 2。
+每个出口先更新同一条 Base 请求，之后再汇入 13.5 的公共目录段。
 
-卡片 2 变量组装代码：[`aily_nodes/b_build_folder_card.py`](./aily_nodes/b_build_folder_card.py)。所有输入都来自技能 B 本次恢复的请求记录和当前目录清单，不来自技能 A。
+### 13.1 `choose_file` 出口：保存用户确认的文件
 
-### 10.2 browse
-
-入口参数：
+在 `B2.action == choose_file` 出口添加“更新多维表格记录”节点，命名：
 
 ```text
-request_id
-action=browse
-selected_folder_token
+B5_choose_file_保存文件
 ```
 
-步骤：
-
-1. 在 `allowed_child_folders_json` 中查找该 token。
-2. 找不到则拒绝，不能直接访问卡片提交的任意 token。
-3. 将白名单中的完整目录对象追加到 `folder_path_json`。
-4. 更新 `current_folder_token/name/url`。
-5. 读取新当前目录的直属子文件夹。
-6. 重写 `allowed_child_folders_json`。
-7. 发送新的卡片 2。
-
-### 10.3 back
-
-步骤：
-
-1. 解析 `folder_path_json`。
-2. 只有根目录一项时禁止返回。
-3. 删除最后一项。
-4. 使用新的末项更新 `current_folder_token/name/url`。
-5. 重新读取直属子文件夹。
-6. 发送新的卡片 2。
-
-不得从卡片接收 `parent_folder_token`。
-
-### 10.4 choose_current_folder
-
-步骤：
-
-1. 从请求记录读取 `current_folder_token/name/url`。
-2. 写入 `target_folder_token/name/url`。
-3. 更新 `status=waiting_confirm`。
-4. 用 `folder_path_json` 生成完整面包屑。
-5. 发送卡片 3。
-
-卡片 3 变量组装代码：[`aily_nodes/b_build_confirm_card.py`](./aily_nodes/b_build_confirm_card.py)。
-
-### 10.5 return_folder
-
-步骤：
-
-1. 将状态从 `waiting_confirm` 恢复为 `selecting_folder`。
-2. 清空 `target_folder_token/name/url`。
-3. 重新读取当前目录直属子文件夹。
-4. 发送新的卡片 2。
-
-### 10.6 cancel
-
-只允许从可取消状态更新：
+参数：
 
 ```text
-status = cancelled
-completed_at = 当前时间
+record_id = B2.request_record_id
 ```
 
-旧卡片应更新为不可继续操作。
+字段：
 
-### 10.7 confirm_upload
+| 字段 | B4 输出 |
+|---|---|
+| `source_message_id` | `source_message_id` |
+| `source_type` | `source_type` |
+| `selected_file_id` | `selected_file_id` |
+| `selected_file_key` | `selected_file_key` |
+| `selected_file_name` | `selected_file_name` |
+| `selected_file_type` | `selected_file_type` |
+| `selected_file_size` | `selected_file_size` |
+| `status` | `status`，应为 `selecting_folder` |
 
-这是唯一允许执行上传的 action。
+此时才第一次写入 `selected_file_*`。
 
-步骤：
+更新成功后连接 13.5。
 
-1. 再次查询最新请求。
-2. 确认状态仍为 `waiting_confirm`。
-3. 将状态更新为：
+### 13.2 `browse` 出口：进入用户选中的子目录
+
+在 `B2.action == browse` 出口添加更新记录节点，命名：
 
 ```text
-waiting_confirm → processing
+B5_browse_保存当前目录
 ```
 
-4. 立即再次读取请求；如果已经是终态、存在 `result_file_token`，或状态不是本次预期，停止上传。
-5. 从请求记录读取：
+参数：
 
 ```text
+record_id = B2.request_record_id
+```
+
+| 字段 | B4 输出 |
+|---|---|
+| `current_folder_token` | `current_folder_token` |
+| `current_folder_name` | `current_folder_name` |
+| `current_folder_url` | `current_folder_url_object`，object |
+| `folder_path_json` | `folder_path_json` |
+| `allowed_child_folders_json` | 固定 `[]` |
+| `status` | B4 `status` |
+
+卡片展示使用字符串 `B4.current_folder_url`，只有 Base URL 字段使用 `current_folder_url_object`。
+
+更新成功后连接 13.5。
+
+### 13.3 `back` 出口：返回上一级目录
+
+复制 `B5_browse_保存当前目录` 节点，命名：
+
+```text
+B5_back_保存上级目录
+```
+
+字段绑定完全相同。B4 已经从 `folder_path_json` 删除最后一级，并会在根目录阻止继续返回。更新成功后连接 13.5。
+
+### 13.4 `return_folder` 出口：从最终确认返回目录选择
+
+在 `B2.action == return_folder` 出口添加更新记录节点：
+
+```text
+record_id           = B2.request_record_id
+status              = B4.status（selecting_folder）
+target_folder_token = 空
+target_folder_name  = 空
+```
+
+`target_folder_url` 是 URL 字段，不能写空字符串。若更新节点支持 `null`，将它设为 `null` 以清空；若不支持，本分支先不提交该 URL 字段，后续再次选择目录时会覆盖它。业务判断只以 `target_folder_token` 是否非空为准。
+
+更新成功后连接 13.5。
+
+### 13.5 公共“读取目录并发卡片 2”
+
+把上面四个更新节点的成功出口连接到同一个公共段。若 Aily 不允许多条线汇入同一节点，就复制四套 13.5 节点；参数完全相同。
+
+添加“获取文件夹下的清单”节点：
+
+```text
+B6_读取当前目录清单
+folder_token = B4.current_folder_token
+```
+
+必须获取当前目录直属内容，不得使用个人云盘根目录。
+
+添加 Python 节点，复制：
+
+[b_build_folder_card.py](./aily_nodes/b_build_folder_card.py)
+
+节点命名：
+
+```text
+B7_组装目录卡片
+```
+
+输入：
+
+| 参数 | 值 |
+|---|---|
+| `folder_list_result` | 目录清单节点完整输出 |
+| `request_id` | B2 `request_id` |
+| `selected_file_name` | B4 `selected_file_name` |
+| `current_folder_token` | B4 `current_folder_token` |
+| `current_folder_name` | B4 `current_folder_name` |
+| `current_folder_url` | B4 `current_folder_url` |
+| `folder_path_json` | B4 `folder_path_json` |
+| `requester_id` | B2 `requester_id` |
+| `warning` | B4 `warning_message` |
+| `callback_skill_id` | 固定 `skill_xxx` |
+
+B7 后添加条件分支：
+
+```text
+B7.ok == false → 更新请求为 failed，写入 B7.error 和 completed_at
+               → 发送 B7.error → 结束
+B7.ok == true  → 保存目录白名单
+```
+
+“获取文件夹下的清单”节点失败时也执行同样的失败落库，`error_message`
+必须绑定清单节点的真实错误。
+
+成功出口添加更新记录节点：
+
+```text
+节点名 = B8_保存子目录白名单
+record_id = B2.request_record_id
+allowed_child_folders_json = B7.allowed_child_folders_json
+```
+
+必须先保存白名单再发送卡片，因为下一次 `browse` 回调要用这份白名单验证目录 token。
+
+更新成功后添加“发送飞书卡片”节点，选择“归档-选择目录-V2”，命名：
+
+```text
+B9_发送目录卡片
+```
+
+变量绑定：
+
+| 卡片变量 | B7 输出 |
+|---|---|
+| `selected_file_name` | `selected_file_name` |
+| `breadcrumb` | `breadcrumb` |
+| `current_folder_url` | `current_folder_url` |
+| `warning` | `warning` |
+| `initiator` | `initiator` |
+| `folder_options` | `folder_options` |
+| `disable_folder_browse` | `disable_folder_browse` |
+| `disable_back` | `disable_back` |
+| `skill_object_browse` | `skill_object_browse` |
+| `skill_object_back` | `skill_object_back` |
+| `skill_object_choose_current` | `skill_object_choose_current` |
+| `skill_object_cancel` | `skill_object_cancel` |
+
+如果发送节点要求目标会话：
+
+```text
+接收类型 = 群聊
+chat_id = B2.chat_id
+```
+
+不要从卡片自定义参数接收 `chat_id`。发送成功后本次技能 B 运行结束；用户下一次点击卡片 2 时会启动一次新的 B 运行。
+
+若保存白名单或发送卡片 2 失败，尝试把该请求更新为 `failed`，写入失败
+节点的真实错误和 `B0.1_当前时间.now_ms`，然后结束；不得继续等待一张
+实际上没有成功发出的卡片。
+
+---
+
+## 第 14 步：搭建最终确认和取消
+
+### 14.1 `choose_current_folder`
+
+从 `B4.2_next_step分支` 的：
+
+```text
+B4.next_step == send_confirm_card
+```
+
+出口开始。添加“更新多维表格记录”节点：
+
+```text
+节点名 = B10_保存目标目录
+record_id = B2.request_record_id
+```
+
+| 字段 | B4 输出 |
+|---|---|
+| `target_folder_token` | `target_folder_token` |
+| `target_folder_name` | `target_folder_name` |
+| `target_folder_url` | `target_folder_url_object`，object |
+| `status` | B4 `status`，应为 `waiting_confirm` |
+
+更新成功后添加 Python 节点，命名：
+
+```text
+B11_组装最终确认卡片
+```
+
+复制：
+
+[b_build_confirm_card.py](./aily_nodes/b_build_confirm_card.py)
+
+输入：
+
+| 参数 | 值 |
+|---|---|
+| `request_id` | B2 `request_id` |
+| `callback_skill_id` | 固定 `skill_xxx` |
+| `requester_id` | B2 `requester_id` |
+| `selected_file_name` | B4 `selected_file_name` |
+| `selected_file_type` | B4 `selected_file_type` |
+| `target_folder_path` | B4 `target_folder_path` |
+| `target_folder_url` | B4 `target_folder_url` |
+| `warning` | B4 `warning_message` |
+
+注意：卡片输入 `target_folder_url` 使用 B4 的字符串输出；只有上一步写 Base 时使用 `target_folder_url_object`。
+
+B11 后添加条件分支：
+
+```text
+B11.ok == false → 更新请求为 failed，写入 B11.error 和 completed_at
+                → 发送 B11.error → 结束
+B11.ok == true  → 发送卡片 3
+```
+
+成功出口添加“发送飞书卡片”节点，选择“归档-最终确认-V2”，卡片变量绑定 B11 同名输出。目标会话：
+
+```text
+接收类型 = 群聊
+chat_id = B2.chat_id
+```
+
+发送成功后结束本次 B 运行。
+
+若发送卡片 3 失败，也将请求更新为 `failed`，写入发送节点的真实错误和
+`B0.1_当前时间.now_ms`，然后结束。
+
+### 14.2 `cancel`
+
+从 `B4.2_next_step分支` 的：
+
+```text
+B4.next_step == end
+```
+
+出口添加“更新多维表格记录”节点：
+
+```text
+节点名       = B10_cancel_保存取消状态
+record_id    = B2.request_record_id
+status       = B4.status（cancelled）
+completed_at = B4.completed_at_ms
+```
+
+更新成功后直接结束，不再发送新卡片。旧卡片由按钮回调对象的 `update_card=true` 更新成“已取消本次归档”。
+
+---
+
+## 第 15 步：搭建 `confirm_upload`
+
+这是 `B3.1_action分支` 中唯一不经过 B4 的出口。
+
+### 15.1 `confirm_upload` 出口：先锁定为 processing
+
+在 `B2.action == confirm_upload` 出口添加“更新多维表格记录”节点：
+
+```text
+节点名        = B12_进入处理中
+record_id     = B2.request_record_id
+status        = processing
+confirmed_at  = B0.1_当前时间.now_ms
+error_message = 空
+```
+
+只有该更新成功才能继续；失败时发送节点真实错误并结束，不能下载文件。
+
+### 15.2 重新查询最新请求
+
+添加“查询多维表格记录”节点：
+
+```text
+节点名         = B13_重查处理中请求
+Base App Token = WHaibyXvuaXuJpsDraJcAAM9nIb
+Table ID       = tblyUgvj29jAL275
+page_size      = 2
+筛选字段         = request_id
+operator         = is
+value             = B0.2.request_id_filter_values
+```
+
+再添加 Python 节点：
+
+```text
+节点名 = B14_校验处理中请求
+代码   = b5_validate_processing_request.py
+```
+
+输入：
+
+| 参数 | 绑定 |
+|---|---|
+| `request_result` | B13 完整输出 |
+| `request_id` | 开始节点 `request_id` |
+
+如果 B13 查询节点本身失败，使用 `B2.request_record_id` 尝试把请求更新为
+`failed`，写入 B13 的真实错误和完成时间，然后结束；不要继续下载。
+
+B14 后添加条件分支节点，按顺序建三个出口：
+
+| 出口 | 条件 | 处理 |
+|---|---|---|
+| 校验失败 | `B14.ok == false` | 若 `request_record_id` 非空且状态为 `processing`，更新 `failed/error_message/completed_at`；否则只发送 B14.error；然后结束 |
+| 已经处理 | `B14.ok == true AND B14.should_upload == false` | 直接结束，不再下载和上传 |
+| 可以上传 | `B14.ok == true AND B14.should_upload == true` | 进入 15.3 |
+
+B14 会输出后续所需的扁平字段，不再让你从重查结果的深层 JSON 中手工选择：
+
+```text
+chat_id
+chat_id_filter_values
 source_message_id
 selected_file_key
 selected_file_name
 selected_file_type
 target_folder_token
-request_id
+target_folder_name
+target_folder_url
+target_folder_path
 ```
 
-6. 下载消息附件。
-7. 按真实下载字节数再次检查：必须大于 0，且不超过映射限制和普通上传接口的 20 MB 上限。
-8. 上传到 `target_folder_token`。
-9. 成功写入：
+### 15.3 下载被回复的消息文件
+
+从“可以上传”出口添加“获取消息资源/下载消息附件”节点：
 
 ```text
-status = success
-result_file_token
-result_file_url
-result_size
-completed_at
+节点名   = B15_下载消息文件
+消息 ID  = B14.source_message_id
+文件 key = B14.selected_file_key
+资源类型  = file
 ```
 
-10. 失败写入：
+先单独调试一次该节点，记住它实际输出的“文件内容”和“文件大小”字段名；不同租户界面名称可能不同，后文简称为：
 
 ```text
-status = failed
-error_message
-completed_at
+B15.file_content
+B15.actual_size
 ```
 
-11. 发送卡片 4。
-
-卡片 4 变量组装代码：[`aily_nodes/b_build_result_card.py`](./aily_nodes/b_build_result_card.py)。
-
-这里实现的是“状态校验 + 卡片更新 + 重复点击防护”，不是严格的原子幂等。普通 Base 查询后更新不能被文档描述成已经具备 CAS 抢占；飞书普通上传接口也没有 `request_id` 幂等参数。若业务要求并发条件下绝不产生重复文件，需要另接支持原子条件写或幂等键的服务。
-
----
-
-## 11. 目录边界与上传
-
-### 11.1 目录清单
-
-每次读取目录时，输入 token 必须来自：
-
-- 请求记录中的 `current_folder_token`；或
-- 当前请求保存的 `allowed_child_folders_json` 白名单项。
-
-返回目录项必须满足：
+下载节点失败出口：
 
 ```text
-item.parent_token == 本次输入的 current_folder_token
+更新 record_id = B14.request_record_id
+status          = failed
+error_message   = 下载节点真实错误
+completed_at    = B0.1_当前时间.now_ms
 ```
 
-不满足时停止发卡片并记录错误，避免误读个人云盘根目录。
+然后进入 15.7 的失败结果卡片。
 
-### 11.2 下载文件
+### 15.4 重查群映射并校验真实文件大小
 
-| 参数 | 来源 |
+下载成功出口添加“查询多维表格记录”节点：
+
+```text
+节点名         = B16_重查群映射
+Base App Token = WHaibyXvuaXuJpsDraJcAAM9nIb
+Table ID       = tblacRVYZZ4SJmWW
+View ID        = vewPOqHrk9
+page_size      = 2
+筛选字段         = chat_id
+operator         = is
+value             = B14.chat_id_filter_values
+```
+
+运行输入必须是 `"value":["oc_xxx"]`。
+
+如果 B16 查询节点本身失败，也更新请求为 `failed`，写入 B16 的真实错误，
+然后进入失败结果卡片。
+
+再添加 Python 节点：
+
+```text
+节点名 = B17_校验上传策略
+代码   = b6_validate_upload_policy.py
+```
+
+输入：
+
+| 参数 | 绑定 |
 |---|---|
-| 消息 ID | 请求表 `source_message_id` |
-| 文件资源 key | 请求表 `selected_file_key` |
-| 资源类型 | 固定 `file` |
+| `mapping_result` | B16 完整输出 |
+| `chat_id` | B14 `chat_id` |
+| `selected_file_type` | B14 `selected_file_type` |
+| `actual_size` | B15 实际文件字节数 |
 
-### 11.3 上传文件
+B17 后添加条件分支：
 
-| 参数 | 来源 |
+```text
+B17.ok == false → 更新 failed、error_message=B17.error、completed_at → 失败结果卡片
+B17.ok == true  → 上传文件
+```
+
+该代码会验证映射唯一且启用、文件类型仍允许、真实大小大于 0，并且不超过 `min(max_file_size_mb,20)`。
+
+### 15.5 上传文件
+
+成功出口添加普通“上传文件”节点：
+
+```text
+节点名      = B18_上传文件
+文件内容     = B15 文件内容
+文件名       = B14.selected_file_name
+父目录 token = B14.target_folder_token
+文件大小     = B17.actual_size
+```
+
+上传失败出口：
+
+```text
+record_id       = B14.request_record_id
+status          = failed
+error_message   = 上传节点真实错误
+completed_at    = B0.1_当前时间.now_ms
+```
+
+然后进入失败结果卡片。
+
+### 15.6 上传成功：把结果链接转换为 Base URL object
+
+上传成功出口添加 Python 节点：
+
+```text
+节点名 = B19_转换结果链接
+代码   = common_build_url_object.py
+```
+
+输入：
+
+```text
+url  = B18 上传结果中的文件链接
+text = B14.selected_file_name
+```
+
+`B19.ok == false` 时不要写成功，改写 `failed` 并发送 `B19.error`。`B19.ok == true` 时更新请求：
+
+```text
+record_id         = B14.request_record_id
+status            = success
+result_file_token = B18 上传结果文件 token
+result_file_url   = B19.url_object       # object，不是字符串
+result_size       = B17.actual_size
+error_message     = 空
+completed_at      = B0.1_当前时间.now_ms
+```
+
+### 15.7 发送结果卡片
+
+成功和失败都使用 [b_build_result_card.py](./aily_nodes/b_build_result_card.py)。如果 Aily 不支持多个分支汇入同一个代码节点，就在成功分支和每个失败分支各复制一个结果卡片代码节点。
+
+公共输入：
+
+| 参数 | 绑定 |
 |---|---|
-| 文件名 | 请求表 `selected_file_name` |
-| 目标目录 | 请求表 `target_folder_token` |
-| 文件内容 | 下载节点输出 |
-| 文件大小 | 下载后的真实字节数，范围 `1..20 MB` |
+| `request_id` | B14 `request_id` |
+| `requester_id` | B2 `requester_id` |
+| `selected_file_name` | B14 `selected_file_name` |
+| `selected_file_type` | B14 `selected_file_type` |
+| `target_folder_name` | B14 `target_folder_name` |
+| `target_folder_path` | B14 `target_folder_path` |
+| `target_folder_url` | B14 `target_folder_url` |
+| `completed_at` | B0.1 `now_ms` |
 
-不得使用卡片展示文本作为上传输入。
-`request_id` 只用于恢复业务状态和排查日志，不是飞书上传接口参数。
-
----
-
-## 12. 权限、身份与平台限制
-
-正式联调前逐项确认：
-
-### 12.1 群消息权限
-
-- 机器人能力已启用并发布。
-- 机器人已经加入触发归档的群。
-- 应用已经开通读取消息所需权限；使用应用身份读取群消息时，必须包含群消息读取权限。
-- “获取指定消息”节点能用 `message.channelInfo.message_id` 查到触发消息。
-- 下载资源时，`source_message_id` 与 `selected_file_key` 必须来自同一条文件消息。
-
-### 12.2 云盘权限
-
-- 先明确“目录清单”和“上传文件”节点使用的是应用身份还是用户身份。
-- 根目录必须授权给实际调用身份；只把目录链接写进多维表格不会自动授予权限。
-- 调用身份必须对根目录及其子目录具有读取清单和上传文件权限。
-- 权限错误、目录不存在、目录映射不存在必须使用不同错误码，不得统一显示“没有目录映射”。
-
-### 12.3 多维表格权限
-
-- 技能 A 能读取“群目录映射”表并创建“归档请求”记录。
-- 技能 B 能按 `request_id` 查询和更新“归档请求”记录。
-- App Token、Table ID、View ID 使用正确，且调用身份对两张表具有相应权限。
-
-### 12.4 文件大小与接口限制
-
-- 获取消息资源文件的上限高于本项目普通上传上限，但最终瓶颈是普通上传的 20 MB。
-- `max_file_size_mb` 只能配置为 `1..20`。
-- 下载后再次以真实字节数校验，空文件和超过 20 MB 的文件停止上传。
-- 要支持大于 20 MB 的文件，必须另建分片上传流程并单独测试。
-
----
-
-## 13. 错误处理规范
-
-### 13.1 错误对象
-
-关键校验节点统一输出：
-
-```json
-{
-  "ok": false,
-  "error_code": "FILE_TYPE_NOT_ALLOWED",
-  "error": "当前文件类型 .md 不在本群允许归档的类型中"
-}
-```
-
-成功：
-
-```json
-{
-  "ok": true,
-  "error_code": "",
-  "error": ""
-}
-```
-
-### 13.2 分支配置
-
-每个关键节点后统一：
+成功分支额外绑定：
 
 ```text
-if ok == true  → 继续
-if ok == false → 发送该节点 error → 结束
+status          = success
+result_file_url = B19.url
+result_size     = B17.actual_size
+error_message   = 空
 ```
 
-禁止：
-
-- 所有失败都发“没有映射”。
-- 忽略代码节点真实 `error`。
-- 用空的 `chat_id/root_folder_name` 推断映射没找到。
-
-### 13.3 推荐错误码
+失败分支额外绑定：
 
 ```text
-INVALID_TRIGGER
-TRIGGER_MESSAGE_NOT_FOUND
-TRIGGER_MESSAGE_MISMATCH
-NOT_REPLY_TO_MESSAGE
-REPLIED_MESSAGE_NOT_FILE
-FILE_MESSAGE_DELETED
-FILE_SENDER_NOT_ALLOWED
-MAPPING_NOT_FOUND
-MAPPING_DUPLICATED
-MAPPING_DISABLED
-ROOT_FOLDER_MISSING
-ROOT_FOLDER_NAME_MISSING
-ROOT_FOLDER_URL_MISSING
-FILE_TYPE_CONFIG_EMPTY
-FILE_TYPE_NOT_ALLOWED
-FILE_SIZE_CONFIG_INVALID
-FILE_SIZE_CONFIG_UNSUPPORTED
-FILE_TOO_LARGE
-CALLBACK_SKILL_ID_MISSING
-CALLBACK_SKILL_ID_INVALID
-REQUEST_NOT_FOUND
-REQUEST_DUPLICATED
-REQUEST_EXPIRED
-OPERATOR_NOT_ALLOWED
-INVALID_ACTION
-INVALID_STATUS
-INVALID_FILE_SELECTION
-INVALID_FOLDER_SELECTION
-FOLDER_OUT_OF_BOUNDARY
-FOLDER_PARENT_MISSING
-DOWNLOAD_FAILED
-UPLOAD_FAILED
-MESSAGE_PERMISSION_DENIED
-FOLDER_PERMISSION_DENIED
+status          = failed
+result_file_url = 空
+result_size     = 0 或 B17.actual_size
+error_message   = 当前失败节点的真实 error
 ```
+
+结果代码 `ok=true` 后发送“归档-结果-V2”，目标会话：
+
+```text
+接收类型 = 群聊
+chat_id = B14.chat_id
+```
+
+卡片 4 没有回调按钮，发送后结束本次技能 B。
+
+当前 Base 的“先查再改”不能提供严格原子 CAS；本流程能阻止顺序重复点击，但两个真正同时到达的回调仍可能并发进入。若业务必须保证绝不重复上传，需要额外的原子幂等服务。
 
 ---
 
-## 14. 不要再添加的节点
+## 第 16 步：统一错误分支、发布和验收
 
-本方案不需要：
+### 16.1 统一错误分支
 
-- 大模型意图分类节点。
-- 智能体节点。
-- 读取 22 条或更多群聊历史的节点。
-- 从最近 30 分钟消息中筛文件的节点。
-- “只有一个候选就跳过确认”的条件分支。
-- 技能 A 等待技能 B 回调的节点。
-- 自建 HTTP 卡片回调节点。
-
-如果平台必须通过技能描述完成路由，可以在技能入口描述中写清“归档文件”，但业务工作流内部仍使用确定性条件判断。
-
----
-
-## 15. 分阶段联调
-
-### 测试 1：映射查询
-
-输入真实 `chat_id`，预期：
+在尚未创建请求，或校验失败不应改变请求状态时，代码节点使用：
 
 ```text
-total = 1
-enabled = true
-root_folder_token 非空
-allowed_file_types 包含测试文件扩展名
+ok == true  → 继续
+ok == false → 发送当前节点.error → 结束
 ```
 
-### 测试 2：回复关系
+请求已经创建且当前分支无法继续时，按下表先将请求更新为 `failed`，再发送
+真实错误或失败结果卡片。不要用上面的简化规则覆盖下表。
 
-用户直接 @机器人但不回复文件。
+“按需”具体按下表执行：
+
+| 失败节点/阶段 | 是否更新请求 | 更新内容 | 是否继续发卡片 |
+|---|---|---|---|
+| 技能 A 读取触发消息、被回复消息或映射查询 | 否，此时请求尚未创建 | 无 | 发送真实文本错误后结束 |
+| 技能 A 创建请求记录 | 否，创建本身失败 | 无 | 发送真实文本错误后结束 |
+| 技能 A 创建请求成功，但卡片 1 组装或发送失败 | 是 | `status=failed`、`error_message=真实错误`、`completed_at=当前时间` | 不再发卡片 |
+| 技能 B 查询不到请求或命中多条 | 无法安全更新 | 无 | 发送真实文本错误，交管理员处理 |
+| B2 操作者、action、状态或白名单校验失败 | 否 | 保留原状态；`REQUEST_EXPIRED` 除外 | 发送 B2.error 后结束 |
+| `REQUEST_EXPIRED` | 是 | `status=expired`、错误和完成时间 | 发送过期提示后结束 |
+| B4 用户操作校验失败，例如根目录继续返回 | 否 | 保留可继续状态 | 发送 B4.error 后结束 |
+| 技能 B 更新请求字段失败 | 更新节点本身失败，不能假设已写入 | 不继续执行后续目录/上传节点 | 发送更新节点真实错误 |
+| 目录清单、目录卡片代码、保存白名单或发送卡片 2 失败 | 是 | `status=failed`、真实错误、完成时间 | 能发送时发送失败文本；不继续目录浏览 |
+| 最终确认卡片代码或发送卡片 3 失败 | 是 | `status=failed`、真实错误、完成时间 | 发送失败文本后结束 |
+| 把状态更新为 `processing` 失败 | 否，不允许下载 | 保留原状态 | 发送更新节点真实错误 |
+| 上传预检、下载、大小校验或上传失败 | 是 | `status=failed`、真实错误、完成时间 | 尝试发送卡片 4 失败结果 |
+| 上传成功但写回 Base 结果失败 | 写回本身失败 | 不得伪称记录已成功；日志保留上传返回 token/URL，发送文本告警并人工补记 | 不发送“已完整归档”的成功卡片 |
+| Base 已写入 `success/failed`，但卡片 4 发送失败 | 否 | 保持已落库终态 | 记录发送错误；不要把业务结果改回失败 |
+
+禁止统一写成：
+
+```text
+当前群没有找到归档目录映射
+```
+
+文件类型错误应显示：
+
+```text
+当前文件类型 .md 不在本群允许归档的类型中
+```
+
+目录权限错误、消息读取错误和上传错误也必须各自显示真实阶段。
+
+### 16.2 重新发布并刷新卡片
+
+1. 发布技能 B。
+2. 确认技能 B ID 没变；如变更，更新所有代码节点的 `callback_skill_id`。
+3. 发布四张卡片。
+4. 回到每个“发送飞书卡片”节点点击“更新/刷新模板”。
+5. 发布技能 A。
+6. 发布整个 Aily 应用。
+
+### 16.3 按顺序验收
+
+#### 用例 1：不回复文件
+
+```text
+直接 @机器人 归档
+```
 
 预期：
 
 ```text
 提示必须回复文件消息
-不查询历史
 不创建请求
 ```
 
-### 测试 3：文件类型错误
+#### 用例 2：文件类型不允许
 
-映射不包含 `md`，回复 `.md` 文件。
+临时从映射中移除 `md`，回复 `.md` 文件。
 
 预期：
 
 ```text
 FILE_TYPE_NOT_ALLOWED
-不显示“没有目录映射”
+不显示“没有映射”
 ```
 
-### 测试 4：单文件确认
+测试后把 `md` 加回。
 
-映射加入 `md` 后重试。
+#### 用例 3：单文件确认
 
 预期：
 
 ```text
 创建 selecting_file 请求
-selected_file_* 全部为空
+selected_file_* 为空
 发送卡片 1
 ```
 
-### 测试 5：技能 B 开始节点自定义参数
+#### 用例 4：技能 B 回调
 
-点击卡片 1。
-
-预期技能 B 开始节点收到：
-
-```text
-request_id
-action=choose_file
-selected_file_id
-operator_id=message.sender.openID
-```
-
-### 测试 6：目录根节点
-
-确认文件后：
-
-```text
-status=selecting_folder
-current_folder_token=映射根目录
-卡片 2 只展示根目录直属子文件夹
-```
-
-### 测试 7：最终确认
-
-选择当前目录后：
-
-```text
-status=waiting_confirm
-卡片 3 正确显示文件和目录
-此时尚未上传
-```
-
-### 测试 8：重复点击防护
-
-连续点击两次确认上传。
+点击确认文件。
 
 预期：
 
 ```text
-第一次点击后旧卡片被 update_card 更新
-第二次回调若仍到达，状态校验会拒绝非 waiting_confirm 请求
-日志中能按 request_id 识别重复提交
+技能 B 收到 request_id/action/selected_file_id
+点击人来自 message.sender.openID
+请求变为 selecting_folder
+发送卡片 2
 ```
 
-这项测试验证的是当前低代码流程的防重复能力，不代表已经证明并发条件下严格原子幂等。需要严格保证时，必须接入支持原子条件写或幂等键的服务。
+#### 用例 5：目录边界
 
-### 测试 9：权限错误
-
-分别移除群消息权限和根目录权限，预期：
+预期：
 
 ```text
-群消息权限错误不会显示成没有目录映射
-目录权限错误不会显示成没有目录映射
-错误信息能定位到消息读取或云盘访问阶段
+卡片 2 只显示当前目录直属子文件夹
+任意伪造 token 被 INVALID_FOLDER_SELECTION 拒绝
+根目录不能再返回上一级
 ```
 
-### 测试 10：普通上传大小边界
+#### 用例 6：最终确认
 
-将 `max_file_size_mb` 配置为 21，预期返回 `FILE_SIZE_CONFIG_UNSUPPORTED`。恢复为 20 后，下载一个超过 20 MB 的文件，预期下载后停止上传。
+点击“使用当前目录”。
+
+预期：
+
+```text
+status = waiting_confirm
+卡片 3 显示正确文件和目录
+此时尚未上传
+```
+
+#### 用例 7：上传
+
+点击“确认上传”。
+
+预期：
+
+```text
+waiting_confirm → processing → success
+文件出现在选定目录
+Base 写入 result_file_token/result_file_url/result_size
+卡片 4 显示成功
+```
+
+#### 用例 8：重复点击
+
+先测试顺序重复点击，再测试快速重复点击。
+
+预期：
+
+```text
+旧卡片被 update_card 更新
+顺序到达的后续回调被状态校验拒绝
+不会把已完成请求重新变回 waiting_confirm
+```
+
+快速并发点击只记录观察结果：当前纯 Base 方案不作为“绝不重复上传”的验收项。若实际业务必须满足该指标，先接入原子锁/幂等服务，再验收并发场景。
+
+#### 用例 9：取消
+
+分别从卡片 1、2、3 点击取消。
+
+预期：
+
+```text
+status = cancelled
+completed_at 非空
+不能继续操作旧卡片
+```
+
+#### 用例 10：文件大小
+
+测试空文件、20 MB 内文件、超过 20 MB 文件。
+
+预期：
+
+```text
+空文件失败
+20 MB 内成功
+超过限制不调用上传
+```
+
+全部通过后，应用搭建完成。
 
 ---
 
-## 16. 最终验收清单
+## 最终节点清单
 
 ### 技能 A
 
-- [ ] 用户必须直接回复文件消息。
-- [ ] 必须 @机器人并包含归档指令。
-- [ ] 不读取整段群聊历史。
-- [ ] 不使用智能体猜文件。
-- [ ] 按当前消息 `parent_id` 精确取得文件。
-- [ ] 按 `chat_id` 精确查询映射，不按群名查询。
-- [ ] 映射查询 0、1、多条分别处理。
-- [ ] 文件类型错误展示真实类型错误。
-- [ ] `.md` 测试时白名单包含 `md`。
-- [ ] `max_file_size_mb` 在 `1..20`。
-- [ ] `only_file_sender_can_archive` 已按产品规则明确配置。
-- [ ] 单个文件仍发送卡片 1。
-- [ ] 创建请求时所有 `selected_file_*` 均为空。
+```text
+A0 开始
+A0.1 Python：common_now_ms.py
+A1 归档指令条件
+A2 获取触发消息
+A2.1 Python：a2_normalize_trigger_message.py
+A2.2 ok / parent_id 条件
+A3 获取被回复消息
+A4 查询群目录映射
+A5 Python：a7_build_archive_request.py
+A6 ok 条件
+A7 创建归档请求
+A8 Python：a9_build_file_confirm_card.py
+A9 ok 条件
+A10 发送卡片 1
+```
 
 ### 技能 B
 
-- [ ] 开始节点声明四个自定义参数。
-- [ ] 每次回调都是一次新的技能 B 运行。
-- [ ] 后续节点不引用技能 A 变量。
-- [ ] 每次都按 `request_id` 重新查询请求。
-- [ ] 操作者固定取 `message.sender.openID`。
-- [ ] 文件选择只允许候选快照内部 ID。
-- [ ] 目录选择只允许当前子目录白名单。
-- [ ] 返回上级不能越过映射根目录。
-- [ ] 最终确认前不上传。
-- [ ] 上传前重新查询状态并拒绝已处理请求。
-- [ ] 已明确当前方案是重复点击防护，不宣称 Base 普通更新具备原子 CAS。
+```text
+B0 开始（4 个自定义参数）
+B0.1 Python：common_now_ms.py
+B0.2 Python：b0_prepare_request_filter.py
+B0.3 条件分支：筛选参数成功 / 失败
+B1 按 request_id 查询请求
+B2 Python：b2_validate_callback.py
+B3 条件分支：校验成功 / 已过期 / 其他失败
+B3.1 条件分支：七个 action
+B4 Python：b3_prepare_action.py
+B4.1 条件分支：B4 成功 / 失败
+B4.2 条件分支：list_folder / send_confirm_card / end
 
-### 卡片与错误
+目录公共段：
+B4.3 条件分支：choose_file / browse / back / return_folder
+→ 各自更新请求 → 读取目录清单 → b_build_folder_card.py
+→ 保存子目录白名单 → 卡片 2
 
-- [ ] 技能 B 已发布并取得正确 `skill_xxx`。
-- [ ] 卡片按钮目标技能都是技能 B。
-- [ ] `skill_input` 参数名与 B 开始节点自定义参数完全一致。
-- [ ] 卡片 2 表单项标识为 `selected_folder_token`。
-- [ ] 卡片 2 下拉框和提交按钮位于同一个表单容器。
-- [ ] 所有推进状态的按钮使用 `update_card=true` 和明确 `success_message`。
-- [ ] 卡片重新发布后，发送卡片节点已经点击“更新”。
-- [ ] 根目录已授权给目录和上传节点的实际调用身份。
-- [ ] 每个错误分支绑定当前节点真实 `error`。
-- [ ] 卡片 4 显示真实结果或可读错误。
-- [ ] App Secret 和访问令牌未进入 Base、卡片变量或普通日志。
+最终确认段：
+更新 target/status → b_build_confirm_card.py → 卡片 3
 
----
+上传段：
+processing → 重查 → b5_validate_processing_request.py
+→ 下载 → 重查映射 → b6_validate_upload_policy.py
+→ 上传 → common_build_url_object.py → 写结果
+→ b_build_result_card.py → 卡片 4
+```
 
-## 17. 当前代码文件
+## 代码文件对应表
 
-| 文件 | 对应职责 |
+| 文件 | 粘贴到 |
 |---|---|
-| [`aily_nodes/a7_build_archive_request.py`](./aily_nodes/a7_build_archive_request.py) | 技能 A：验证直接回复关系、文件和映射，生成单文件请求快照 |
-| [`aily_nodes/a9_build_file_confirm_card.py`](./aily_nodes/a9_build_file_confirm_card.py) | 技能 A：组装单文件确认卡片和技能 B 回调参数 |
-| [`aily_nodes/b2_validate_callback.py`](./aily_nodes/b2_validate_callback.py) | 技能 B：验证开始节点自定义参数、恢复请求并校验状态和白名单 |
-| [`aily_nodes/b_build_folder_card.py`](./aily_nodes/b_build_folder_card.py) | 技能 B：组装目录浏览卡片 |
-| [`aily_nodes/b_build_confirm_card.py`](./aily_nodes/b_build_confirm_card.py) | 技能 B：组装最终确认卡片 |
-| [`aily_nodes/b_build_result_card.py`](./aily_nodes/b_build_result_card.py) | 技能 B：组装成功或失败结果卡片 |
-| [`tests/test_aily_nodes.py`](./tests/test_aily_nodes.py) | 当前节点合同和关键安全规则测试 |
+| [common_now_ms.py](./aily_nodes/common_now_ms.py) | 技能 A/B：取得可信当前毫秒时间 |
+| [a2_normalize_trigger_message.py](./aily_nodes/a2_normalize_trigger_message.py) | 技能 A：提取触发消息并生成 Base 查询所需的字符串数组 |
+| [a7_build_archive_request.py](./aily_nodes/a7_build_archive_request.py) | 技能 A / A5：生成请求 |
+| [a9_build_file_confirm_card.py](./aily_nodes/a9_build_file_confirm_card.py) | 技能 A / A8：卡片 1 |
+| [b0_prepare_request_filter.py](./aily_nodes/b0_prepare_request_filter.py) | 技能 B：把开始节点的 request_id 字符串转换为 Base 筛选数组 |
+| [b2_validate_callback.py](./aily_nodes/b2_validate_callback.py) | 技能 B：公共回调校验 |
+| [b3_prepare_action.py](./aily_nodes/b3_prepare_action.py) | 技能 B / B4：六个非上传 action 状态转换 |
+| [b5_validate_processing_request.py](./aily_nodes/b5_validate_processing_request.py) | 技能 B / B14：上传前重查并展开可信请求字段 |
+| [b6_validate_upload_policy.py](./aily_nodes/b6_validate_upload_policy.py) | 技能 B / B17：校验最新群映射、文件类型和真实字节数 |
+| [common_build_url_object.py](./aily_nodes/common_build_url_object.py) | 技能 B / B19：把 URL 字符串转换为 Base 超链接 object |
+| [b_build_folder_card.py](./aily_nodes/b_build_folder_card.py) | 技能 B：卡片 2 |
+| [b_build_confirm_card.py](./aily_nodes/b_build_confirm_card.py) | 技能 B：卡片 3 |
+| [b_build_result_card.py](./aily_nodes/b_build_result_card.py) | 技能 B：卡片 4 |
 
-仓库中不再保留扫描群聊历史的旧 A5，也不再保留多候选下拉卡片的旧 A8。
+不要再添加：
 
-在 Aily 中复制 Python 代码后，先调试代码节点，让平台自动解析 `main()` 的返回结构；然后确认下游可以选择 `ok`、`error_code`、`error` 以及各卡片对象等命名输出。旧版界面若未自动更新，再使用 JSON 示例手动补齐输出结构，代码返回对象和节点输出类型必须完全一致。
+```text
+智能体节点
+大模型选择文件节点
+读取最近 20/30 条群消息节点
+单候选跳过确认分支
+技能 A 在发送卡片后顺序调用工作流 B 的节点
+自建 HTTP 卡片回调节点
+```

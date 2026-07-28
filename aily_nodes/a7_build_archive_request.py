@@ -1,4 +1,4 @@
-"""Aily A7 node: build one archive request from an explicitly replied file.
+"""Build one archive request from an explicitly replied file for Skill A.
 
 Inputs are the complete outputs of:
 - the Base mapping query;
@@ -189,6 +189,8 @@ def _base_result() -> Dict[str, Any]:
         "root_folder_token": "",
         "root_folder_name": "",
         "root_folder_url": "",
+        "root_folder_url_object": {},
+        "current_folder_url_object": {},
         "max_file_size_mb": 0,
         "single_upload_max_mb": SINGLE_UPLOAD_MAX_MB,
         "only_file_sender_can_archive": False,
@@ -419,6 +421,14 @@ def main(
             "initial_status": "selecting_file",
             "folder_path_json": json.dumps(folder_path, ensure_ascii=False),
             "expires_at_ms": current_ms + REQUEST_TTL_MS,
+            "root_folder_url_object": {
+                "text": root_name,
+                "link": root_url,
+            },
+            "current_folder_url_object": {
+                "text": root_name,
+                "link": root_url,
+            },
         }
     )
     return result
