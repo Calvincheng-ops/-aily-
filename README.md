@@ -12,6 +12,8 @@
 ## 文档
 
 - [BUILD_GUIDE_V2.md](./BUILD_GUIDE_V2.md) — 从第 1 步做到第 16 步的唯一搭建操作手册
+- [AILY_TECHNICAL_NOTES_2026-07-29.md](./AILY_TECHNICAL_NOTES_2026-07-29.md) — Aily、Base、卡片和上传流程的技术沉淀
+- [AGENT_HANDOFF.md](./AGENT_HANDOFF.md) — 供其他 Agent 快速接手的项目现状与排障入口
 - [ARCHITECTURE_V2.mmd](./ARCHITECTURE_V2.mmd) — 唯一架构流程图源文件
 - [ARCHITECTURE_V2.png](./ARCHITECTURE_V2.png) — 与源文件同步生成的流程图图片
 - [CLAUDE.md](./CLAUDE.md) — AI Agent 项目指令

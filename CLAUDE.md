@@ -7,6 +7,8 @@
 | 文档 | 内容 |
 |------|------|
 | [BUILD_GUIDE_V2.md](./BUILD_GUIDE_V2.md) | 搭建手册：技能 A/B、四张卡片、上传、权限、联调验收 |
+| [AILY_TECHNICAL_NOTES_2026-07-29.md](./AILY_TECHNICAL_NOTES_2026-07-29.md) | 已验证的 Aily、Base、卡片、消息和上传技术细节 |
+| [AGENT_HANDOFF.md](./AGENT_HANDOFF.md) | Agent 交接入口：当前状态、阅读顺序、下一步和排障方式 |
 | [ARCHITECTURE_V2.mmd](./ARCHITECTURE_V2.mmd) | 唯一 Mermaid 架构流程图 |
 | [ARCHITECTURE_V2.png](./ARCHITECTURE_V2.png) | 由 Mermaid 源文件同步导出的流程图图片 |
 
