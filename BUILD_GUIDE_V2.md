@@ -1156,773 +1156,641 @@ value             = B0.2.request_id_filter_values
 | `selected_folder_token` | 开始节点 `selected_folder_token` |
 | `now_ms` | `B0.1_当前时间.now_ms` |
 
-### 11.3 B3 添加“条件分支”节点，处理 B2 成功或失败
+### 11.3 第 11–16 步通用约定
 
-本文后面说的“路由”不是一个特殊节点，而是 Aily 的**条件分支节点**。它的作用只是根据某个变量的值，把连线分到不同出口。
+从这里到第 16 步，每一步只做一件事。步骤按以下约定书写，不再逐步解释：
 
-在 B2 后添加一个“条件分支”节点，命名：
+1. 「添加节点」指在画布上点击节点后面的「+」，选择节点类型。
+2. 「绑定：`节点名.输出名`」指在参数输入框中从变量选择器里点选该上游输出，不要手工输入变量名。
+3. 「固定：xxx」指直接在参数框中输入该固定值。
+4. 所有「查询 / 创建 / 更新多维表格记录」节点统一先填：
+   - Base App Token 固定：`WHaibyXvuaXuJpsDraJcAAM9nIb`
+   - 归档请求 Table ID 固定：`tblyUgvj29jAL275`
+   - 群目录映射 Table ID 固定：`tblacRVYZZ4SJmWW`，View ID 固定：`vewPOqHrk9`
 
-```text
-B3_校验结果分支
-```
+   后文只写用哪张表，不再重复这四项。
+5. Base 字段一律从节点刷新后的字段列表中点选，不要手工输入字段名。
+6. 所有「发送飞书卡片」节点：底部 HTTP 回调地址留空；接收类型选「群聊」。
+7. 所有「条件分支」节点按「从上到下第一条命中」执行，分支顺序必须严格按步骤给出的顺序建立。
+8. 「失败出口」指节点配置中的失败 / 异常分支。若当前界面的节点没有失败出口，就在该节点后面添加一个「条件分支」节点：该节点的错误输出「非空」走失败处理，否则走继续。
+9. 条件里的布尔右值必须选布尔类型的 `true` / `false`，不要选成字符串。
+10. 代码节点步骤会给出仓库文件链接。必须完整复制整个文件粘贴到代码编辑区，不要只复制 `main()`。
+11. 技能 B 每次改动后，先「发布技能 B」，再点击卡片做联调测试。
+12. 本文中的「路由」一律指「条件分支」节点，不是特殊节点。
 
-按下面顺序建立三个出口。若界面提供“且/AND”，同一出口内的条件使用 AND。
+### 11.4 添加 B3 校验结果分支
 
-#### 出口 1：`已过期`
+1. 在 B2 节点后面添加一个「条件分支」节点，节点名填：`B3_校验结果分支`。
+2. 打开 B3 节点，建立第 1 个分支，分支名填：`已过期`。按下表建 2 个条件，条件之间选「且 / AND」：
 
-```text
-左值 1 = B2.ok
-运算符 = 等于
-右值 1 = false（布尔值，不是字符串）
+   | 序号 | 左值 | 运算符 | 右值 |
+   |---|---|---|---|
+   | 1 | 绑定：`B2.ok` | 等于 | 布尔 `false` |
+   | 2 | 绑定：`B2.error_code` | 等于 | 固定：`REQUEST_EXPIRED` |
 
-AND
+3. 建立第 2 个分支，分支名填：`其他失败`。按下表建 2 个条件，条件之间选「且 / AND」：
 
-左值 2 = B2.error_code
-运算符 = 等于
-右值 2 = REQUEST_EXPIRED
-```
+   | 序号 | 左值 | 运算符 | 右值 |
+   |---|---|---|---|
+   | 1 | 绑定：`B2.ok` | 等于 | 布尔 `false` |
+   | 2 | 绑定：`B2.error_code` | 不等于 | 固定：`REQUEST_EXPIRED` |
 
-连接到“更新多维表格记录”节点：
+4. 建立第 3 个分支，分支名填：`校验成功`。按下表建 1 个条件：
 
-```text
-record_id     = B2.request_record_id
-status        = expired
-error_message = B2.error
-completed_at  = B0.1_当前时间.now_ms
-```
+   | 左值 | 运算符 | 右值 |
+   |---|---|---|
+   | 绑定：`B2.ok` | 等于 | 布尔 `true` |
 
-更新成功后发送文本：
+5. 检查三个分支的顺序必须是：`已过期` → `其他失败` → `校验成功`。
 
-```text
-{{B2.error}}
-```
+### 11.5 搭建「已过期」分支
 
-然后连接结束节点。
+1. 在 `已过期` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`写入过期状态`。
+2. `record_id` 绑定：`B2.request_record_id`。
+3. 字段按下表设置：
 
-#### 出口 2：`其他失败`
+   | Base 字段 | 值 |
+   |---|---|
+   | `status` | 固定：选单选值 `expired` |
+   | `error_message` | 绑定：`B2.error` |
+   | `completed_at` | 绑定：`B0.1_当前时间.now_ms` |
 
-```text
-左值 1 = B2.ok
-运算符 = 等于
-右值 1 = false
+4. 在 `写入过期状态` 后面添加「发送消息」节点，消息内容绑定：`B2.error`。
+5. 在「发送消息」节点后面添加「结束」节点。
 
-AND
+### 11.6 搭建「其他失败」分支
 
-左值 2 = B2.error_code
-运算符 = 不等于
-右值 2 = REQUEST_EXPIRED
-```
+1. 在 `其他失败` 分支后面添加「发送消息」节点，消息内容绑定：`B2.error`。
+2. 在「发送消息」节点后面添加「结束」节点。
+3. 该分支不要添加任何「更新多维表格记录」节点。
 
-连接“发送消息”节点，内容绑定 `B2.error`，然后结束。不要在该分支更新请求状态，因为操作者错误、伪造 action 或旧卡片重复点击不应该覆盖原状态。
+### 11.7 添加 B3.1 action 分支
 
-#### 出口 3：`校验成功`
+1. 在 `校验成功` 分支后面添加一个「条件分支」节点，节点名填：`B3.1_action分支`。
+2. 按下表建立 7 个分支。每个分支的条件都是：左值绑定 `B2.action`，运算符「等于」，右值固定为表中的字符串：
 
-```text
-左值 = B2.ok
-运算符 = 等于
-右值 = true（布尔值）
-```
+   | 分支名 | 右值（固定字符串） | 后续接到哪里 |
+   |---|---|---|
+   | `确认文件` | `choose_file` | B4（第 12 步连接） |
+   | `进入子目录` | `browse` | B4（第 12 步连接） |
+   | `返回上级` | `back` | B4（第 12 步连接） |
+   | `使用当前目录` | `choose_current_folder` | B4（第 12 步连接） |
+   | `返回选目录` | `return_folder` | B4（第 12 步连接） |
+   | `取消` | `cancel` | B4（第 12 步连接） |
+   | `确认上传` | `confirm_upload` | B12（第 15 步连接，不接 B4） |
 
-连接下一节的 `B3.1_action分支`。
-
-如果条件节点按“从上到下第一条命中”执行，务必保持顺序：
-
-```text
-已过期 → 其他失败 → 校验成功
-```
-
-B2 的作用只是校验，不更新 Base。它已经检查请求唯一、点击人、状态、有效期、根目录边界和卡片选项白名单。
-
-### 11.4 B3.1 再添加一个“条件分支”节点，按 action 分流
-
-在“校验成功”出口后再添加一个条件分支节点，命名：
-
-```text
-B3.1_action分支
-```
-
-建立七个出口。每个出口都使用：
-
-```text
-左值 = B2.action
-运算符 = 等于
-右值 = 下表固定字符串
-```
-
-| 出口名称 | 右值 | 接到哪里 |
-|---|---|---|
-| 确认文件 | `choose_file` | B4_准备状态更新 |
-| 进入子目录 | `browse` | B4_准备状态更新 |
-| 返回上级 | `back` | B4_准备状态更新 |
-| 使用当前目录 | `choose_current_folder` | B4_准备状态更新 |
-| 返回选目录 | `return_folder` | B4_准备状态更新 |
-| 取消 | `cancel` | B4_准备状态更新 |
-| 确认上传 | `confirm_upload` | 第 15 步上传分支，不经过 B4 |
-
-如果 Aily 不允许六条出口汇入同一个 B4 节点，就复制六个相同的 B4 代码节点，分别命名为 `B4_choose_file`、`B4_browse` 等；每个节点的代码和输入完全相同。不要用智能体节点判断 action。
+3. 7 条分支线暂时悬空，第 12 步和第 15 步分别连接。
 
 ---
 
 ## 第 12 步：添加 B4 状态转换代码
 
-新增一个 Python 代码节点，命名：
+### 12.1 添加 B4 代码节点
 
-```text
-B4_准备状态更新
-```
+1. 添加一个 Python 代码节点，节点名填：`B4_准备状态更新`。
+2. 完整复制 [b3_prepare_action.py](./aily_nodes/b3_prepare_action.py) 的全部内容，粘贴到代码编辑区。
+3. 输入参数按下表绑定：
 
-复制完整文件：
+   | `main()` 参数 | 绑定 |
+   |---|---|
+   | `action` | `B2.action` |
+   | `request_json` | `B2.request_json` |
+   | `selected_candidate_json` | `B2.selected_candidate_json` |
+   | `selected_folder_json` | `B2.selected_folder_json` |
+   | `now_ms` | `B0.1_当前时间.now_ms` |
 
-[b3_prepare_action.py](./aily_nodes/b3_prepare_action.py)
+4. 先调试一次该节点，让 Aily 自动识别返回字段。
+5. 把 B3.1 的 6 个分支（`确认文件` / `进入子目录` / `返回上级` / `使用当前目录` / `返回选目录` / `取消`）全部连接到 B4 节点。
+6. 如果平台不允许多条线汇入同一个节点：复制 6 个 B4 节点，分别命名 `B4_choose_file`、`B4_browse`、`B4_back`、`B4_choose_current_folder`、`B4_return_folder`、`B4_cancel`，代码和输入绑定完全相同，每个分支各接一个副本。后续步骤中的「B4.输出」对应你画布上各副本的同名输出。
 
-该节点用于六个非上传 action：
+### 12.2 添加 B4.1 结果分支
 
-```text
-choose_file
-browse
-back
-choose_current_folder
-return_folder
-cancel
-```
+1. 在 B4 后面添加「条件分支」节点，节点名填：`B4.1_B4结果分支`。
+2. 建立第 1 个分支，分支名填：`B4失败`。条件：左值绑定 `B4.ok`，运算符「等于」，右值布尔 `false`。
+3. 建立第 2 个分支，分支名填：`B4成功`。条件：左值绑定 `B4.ok`，运算符「等于」，右值布尔 `true`。
+4. 在 `B4失败` 分支后面添加「发送消息」节点，内容绑定：`B4.error`。
+5. 在「发送消息」节点后面添加「结束」节点。该分支不要添加更新节点。
+6. `B4成功` 分支接 12.3。
 
-输入绑定：
+### 12.3 添加 B4.2 next_step 分支
 
-| 参数 | 值 |
-|---|---|
-| `action` | `B2.action` |
-| `request_json` | `B2.request_json` |
-| `selected_candidate_json` | `B2.selected_candidate_json` |
-| `selected_folder_json` | `B2.selected_folder_json` |
-| `now_ms` | `B0.1_当前时间.now_ms` |
+1. 在 `B4成功` 分支后面添加「条件分支」节点，节点名填：`B4.2_next_step分支`。
+2. 按下表建立 3 个分支。每个分支的条件都是：左值绑定 `B4.next_step`，运算符「等于」，右值固定为表中的字符串：
 
-六个非上传出口连接到 B4。B4 后添加“条件分支”节点，命名：
+   | 分支名 | 右值（固定字符串） | 后续接到哪里 |
+   |---|---|---|
+   | `显示目录卡片` | `list_folder` | 第 13 步 B4.3 |
+   | `发最终确认` | `send_confirm_card` | 第 14.1 步 B10 |
+   | `取消结束` | `end` | 第 14.3 步取消落库 |
 
-```text
-B4.1_B4结果分支
-```
-
-两个出口：
-
-```text
-出口“成功”：B4.ok 等于 true
-出口“失败”：B4.ok 等于 false
-```
-
-失败出口发送 `B4.error` 后结束。成功出口再添加一个条件分支节点：
-
-```text
-B4.2_next_step分支
-```
-
-按 `B4.next_step` 建立三个出口：
-
-| 条件 | 含义 | 接到哪里 |
-|---|---|---|
-| `B4.next_step == list_folder` | 需要显示目录卡片 | 第 13 步目录处理 |
-| `B4.next_step == send_confirm_card` | 已选择目标目录 | 第 14.1 步最终确认 |
-| `B4.next_step == end` | 已取消 | 第 14.2 步取消落库 |
-
-为什么还要看 `next_step`：`B2.action` 是用户点了什么，`B4.next_step` 是代码校验并转换状态后下一步真正要做什么。两者不要混用。
-
-B4 会输出两套 URL：
-
-```text
-current_folder_url          字符串，只给卡片展示
-current_folder_url_object   object，只写 Base URL 字段
-target_folder_url           字符串，只给卡片展示
-target_folder_url_object    object，只写 Base URL 字段
-```
+3. 3 条分支线暂时悬空，第 13、14 步分别连接。
 
 ---
 
 ## 第 13 步：搭建目录选择相关分支
 
-从 `B4.2_next_step分支` 的 `list_folder` 出口开始搭建。先添加一个条件分支节点：
+### 13.1 添加 B4.3 目录动作分支
 
-```text
-B4.3_目录动作分支
-```
+1. 在 B4.2 的 `显示目录卡片` 分支后面添加「条件分支」节点，节点名填：`B4.3_目录动作分支`。
+2. 按下表建立 4 个分支。每个分支的条件都是：左值绑定 `B2.action`，运算符「等于」，右值固定为表中的字符串：
 
-左值统一选择 `B2.action`，分别建立四个出口：
+   | 分支名 | 右值（固定字符串） | 后续接到哪里 |
+   |---|---|---|
+   | `确认文件` | `choose_file` | 13.2 |
+   | `进入子目录` | `browse` | 13.3 |
+   | `返回上级` | `back` | 13.4 |
+   | `返回选目录` | `return_folder` | 13.5 |
 
-```text
-choose_file
-browse
-back
-return_folder
-```
+### 13.2 「确认文件」分支：B5_choose_file_保存文件
 
-每个出口先更新同一条 Base 请求，之后再汇入 13.5 的公共目录段。
+1. 在 `确认文件` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B5_choose_file_保存文件`。
+2. `record_id` 绑定：`B2.request_record_id`。
+3. 字段按下表设置（全部绑定 B4 输出）：
 
-### 13.1 `choose_file` 出口：保存用户确认的文件
+   | Base 字段 | 绑定 |
+   |---|---|
+   | `source_message_id` | `B4.source_message_id` |
+   | `source_type` | `B4.source_type` |
+   | `selected_file_id` | `B4.selected_file_id` |
+   | `selected_file_key` | `B4.selected_file_key` |
+   | `selected_file_name` | `B4.selected_file_name` |
+   | `selected_file_type` | `B4.selected_file_type` |
+   | `selected_file_size` | `B4.selected_file_size` |
+   | `status` | `B4.status`（运行时应为 `selecting_folder`） |
 
-在 `B2.action == choose_file` 出口添加“更新多维表格记录”节点，命名：
+4. 该更新节点的失败出口：添加「发送消息」节点，内容绑定该更新节点的错误输出，后面接「结束」节点。
+5. 该更新节点的成功出口：接 13.6 的 B6（先悬空，13.6 建好后连接）。
 
-```text
-B5_choose_file_保存文件
-```
+### 13.3 「进入子目录」分支：B5_browse_保存当前目录
 
-参数：
+1. 在 `进入子目录` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B5_browse_保存当前目录`。
+2. `record_id` 绑定：`B2.request_record_id`。
+3. 字段按下表设置：
 
-```text
-record_id = B2.request_record_id
-```
+   | Base 字段 | 值 |
+   |---|---|
+   | `current_folder_token` | 绑定：`B4.current_folder_token` |
+   | `current_folder_name` | 绑定：`B4.current_folder_name` |
+   | `current_folder_url` | 绑定：`B4.current_folder_url_object`（object） |
+   | `folder_path_json` | 绑定：`B4.folder_path_json` |
+   | `allowed_child_folders_json` | 固定：`[]` |
+   | `status` | 绑定：`B4.status` |
 
-字段：
+   注意：`current_folder_url` 是 Base URL 字段，必须绑定 object 输出 `B4.current_folder_url_object`，不要绑定字符串 `B4.current_folder_url`。
 
-| 字段 | B4 输出 |
-|---|---|
-| `source_message_id` | `source_message_id` |
-| `source_type` | `source_type` |
-| `selected_file_id` | `selected_file_id` |
-| `selected_file_key` | `selected_file_key` |
-| `selected_file_name` | `selected_file_name` |
-| `selected_file_type` | `selected_file_type` |
-| `selected_file_size` | `selected_file_size` |
-| `status` | `status`，应为 `selecting_folder` |
+4. 该更新节点的失败出口：添加「发送消息」节点，内容绑定该更新节点的错误输出，后面接「结束」节点。
+5. 该更新节点的成功出口：接 13.6 的 B6。
 
-此时才第一次写入 `selected_file_*`。
+### 13.4 「返回上级」分支：B5_back_保存上级目录
 
-更新成功后连接 13.5。
+1. 复制 13.3 的 `B5_browse_保存当前目录` 节点，粘贴到 `返回上级` 分支后面，节点名改为：`B5_back_保存上级目录`。
+2. 字段绑定与 13.3 完全相同，不要改动。
+3. 失败出口和成功出口的接法与 13.3 相同。
 
-### 13.2 `browse` 出口：进入用户选中的子目录
+### 13.5 「返回选目录」分支：B5_return_folder_清空目标目录
 
-在 `B2.action == browse` 出口添加更新记录节点，命名：
+1. 在 `返回选目录` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B5_return_folder_清空目标目录`。
+2. `record_id` 绑定：`B2.request_record_id`。
+3. 字段按下表设置：
 
-```text
-B5_browse_保存当前目录
-```
+   | Base 字段 | 值 |
+   |---|---|
+   | `status` | 绑定：`B4.status`（运行时应为 `selecting_folder`） |
+   | `target_folder_token` | 添加该字段，值留空（不绑定任何变量） |
+   | `target_folder_name` | 添加该字段，值留空（不绑定任何变量） |
 
-参数：
+4. `target_folder_url` 是 URL 字段，不能写空字符串。如果更新节点支持提交 `null`，把该字段设为 `null`；如果不支持，本分支不要添加该字段（后续再次选择目录时会覆盖它）。
+5. 该更新节点的失败出口：添加「发送消息」节点，内容绑定该更新节点的错误输出，后面接「结束」节点。
+6. 该更新节点的成功出口：接 13.6 的 B6。
 
-```text
-record_id = B2.request_record_id
-```
+### 13.6 B6 读取当前目录清单
 
-| 字段 | B4 输出 |
-|---|---|
-| `current_folder_token` | `current_folder_token` |
-| `current_folder_name` | `current_folder_name` |
-| `current_folder_url` | `current_folder_url_object`，object |
-| `folder_path_json` | `folder_path_json` |
-| `allowed_child_folders_json` | 固定 `[]` |
-| `status` | B4 `status` |
+1. 添加「获取文件夹下的清单」节点，节点名填：`B6_读取当前目录清单`。
+2. `folder_token` 绑定：`B4.current_folder_token`。
+3. 把 13.2–13.5 四个更新节点的成功出口全部连接到 B6。如果平台不允许多条线汇入同一个节点，就复制 4 套 13.6–13.9 的节点，每个分支一套，参数完全相同。
+4. B6 的失败出口：添加「更新多维表格记录」节点（归档请求表），节点名填：`B6失败_写入failed`。`record_id` 绑定 `B2.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定 B6 的错误输出；`completed_at` 绑定 `B0.1_当前时间.now_ms`。
+5. 在 `B6失败_写入failed` 后面添加「发送消息」节点，内容绑定 B6 的错误输出，后面接「结束」节点。
 
-卡片展示使用字符串 `B4.current_folder_url`，只有 Base URL 字段使用 `current_folder_url_object`。
+### 13.7 B7 组装目录卡片
 
-更新成功后连接 13.5。
+1. 在 B6 的成功出口后面添加 Python 代码节点，节点名填：`B7_组装目录卡片`。
+2. 完整复制 [b_build_folder_card.py](./aily_nodes/b_build_folder_card.py) 的全部内容，粘贴到代码编辑区。
+3. 输入参数按下表绑定：
 
-### 13.3 `back` 出口：返回上一级目录
+   | `main()` 参数 | 绑定 |
+   |---|---|
+   | `folder_list_result` | `B6_读取当前目录清单` 完整输出 |
+   | `request_id` | `B2.request_id` |
+   | `selected_file_name` | `B4.selected_file_name` |
+   | `current_folder_token` | `B4.current_folder_token` |
+   | `current_folder_name` | `B4.current_folder_name` |
+   | `current_folder_url` | `B4.current_folder_url`（字符串） |
+   | `folder_path_json` | `B4.folder_path_json` |
+   | `requester_id` | `B2.requester_id` |
+   | `warning` | `B4.warning_message` |
+   | `callback_skill_id` | 固定：第 3 步记录的技能 B ID（`skill_xxx`） |
 
-复制 `B5_browse_保存当前目录` 节点，命名：
+4. 先调试一次该节点，让 Aily 自动识别返回字段。
+5. 在 B7 后面添加「条件分支」节点，节点名填：`B7.1_B7结果分支`。
+6. 建立第 1 个分支，分支名填：`B7失败`。条件：左值绑定 `B7.ok`，运算符「等于」，右值布尔 `false`。
+7. 建立第 2 个分支，分支名填：`B7成功`。条件：左值绑定 `B7.ok`，运算符「等于」，右值布尔 `true`。
+8. 在 `B7失败` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B7失败_写入failed`。`record_id` 绑定 `B2.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定 `B7.error`；`completed_at` 绑定 `B0.1_当前时间.now_ms`。
+9. 在 `B7失败_写入failed` 后面添加「发送消息」节点，内容绑定 `B7.error`，后面接「结束」节点。
 
-```text
-B5_back_保存上级目录
-```
+### 13.8 B8 保存子目录白名单
 
-字段绑定完全相同。B4 已经从 `folder_path_json` 删除最后一级，并会在根目录阻止继续返回。更新成功后连接 13.5。
+1. 在 `B7成功` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B8_保存子目录白名单`。
+2. `record_id` 绑定：`B2.request_record_id`。
+3. 字段只设置一项：`allowed_child_folders_json` 绑定 `B7.allowed_child_folders_json`。
+4. B8 的失败出口：添加「更新多维表格记录」节点（归档请求表），节点名填：`B8失败_写入failed`。`record_id` 绑定 `B2.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定 B8 的错误输出；`completed_at` 绑定 `B0.1_当前时间.now_ms`。
+5. 在 `B8失败_写入failed` 后面添加「发送消息」节点，内容绑定 B8 的错误输出，后面接「结束」节点。
+6. 顺序检查：必须先保存白名单（B8），再发卡片 2（13.9），不能调换。
 
-### 13.4 `return_folder` 出口：从最终确认返回目录选择
+### 13.9 B9 发送卡片 2
 
-在 `B2.action == return_folder` 出口添加更新记录节点：
+1. 在 B8 的成功出口后面添加「发送飞书卡片」节点，节点名填：`B9_发送目录卡片`，卡片模板选：`归档-选择目录-V2`。
+2. 卡片变量按下表绑定（全部绑定 B7 同名输出）：
 
-```text
-record_id           = B2.request_record_id
-status              = B4.status（selecting_folder）
-target_folder_token = 空
-target_folder_name  = 空
-```
+   | 卡片变量 | 绑定 |
+   |---|---|
+   | `selected_file_name` | `B7.selected_file_name` |
+   | `breadcrumb` | `B7.breadcrumb` |
+   | `current_folder_url` | `B7.current_folder_url` |
+   | `warning` | `B7.warning` |
+   | `initiator` | `B7.initiator` |
+   | `folder_options` | `B7.folder_options` |
+   | `disable_folder_browse` | `B7.disable_folder_browse` |
+   | `disable_back` | `B7.disable_back` |
+   | `skill_object_browse` | `B7.skill_object_browse` |
+   | `skill_object_back` | `B7.skill_object_back` |
+   | `skill_object_choose_current` | `B7.skill_object_choose_current` |
+   | `skill_object_cancel` | `B7.skill_object_cancel` |
 
-`target_folder_url` 是 URL 字段，不能写空字符串。若更新节点支持 `null`，将它设为 `null` 以清空；若不支持，本分支先不提交该 URL 字段，后续再次选择目录时会覆盖它。业务判断只以 `target_folder_token` 是否非空为准。
+3. 接收会话：接收类型选「群聊」，`chat_id` 绑定：`B2.chat_id`。
+4. B9 的失败出口：添加「更新多维表格记录」节点（归档请求表），节点名填：`B9失败_写入failed`。`record_id` 绑定 `B2.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定 B9 的错误输出；`completed_at` 绑定 `B0.1_当前时间.now_ms`。后面接「结束」节点。
+5. B9 的成功出口接「结束」节点。
 
-更新成功后连接 13.5。
+### 13.10 联调检查点：卡片 2
 
-### 13.5 公共“读取目录并发卡片 2”
-
-把上面四个更新节点的成功出口连接到同一个公共段。若 Aily 不允许多条线汇入同一节点，就复制四套 13.5 节点；参数完全相同。
-
-添加“获取文件夹下的清单”节点：
-
-```text
-B6_读取当前目录清单
-folder_token = B4.current_folder_token
-```
-
-必须获取当前目录直属内容，不得使用个人云盘根目录。
-
-添加 Python 节点，复制：
-
-[b_build_folder_card.py](./aily_nodes/b_build_folder_card.py)
-
-节点命名：
-
-```text
-B7_组装目录卡片
-```
-
-输入：
-
-| 参数 | 值 |
-|---|---|
-| `folder_list_result` | 目录清单节点完整输出 |
-| `request_id` | B2 `request_id` |
-| `selected_file_name` | B4 `selected_file_name` |
-| `current_folder_token` | B4 `current_folder_token` |
-| `current_folder_name` | B4 `current_folder_name` |
-| `current_folder_url` | B4 `current_folder_url` |
-| `folder_path_json` | B4 `folder_path_json` |
-| `requester_id` | B2 `requester_id` |
-| `warning` | B4 `warning_message` |
-| `callback_skill_id` | 固定 `skill_xxx` |
-
-B7 后添加条件分支：
-
-```text
-B7.ok == false → 更新请求为 failed，写入 B7.error 和 completed_at
-               → 发送 B7.error → 结束
-B7.ok == true  → 保存目录白名单
-```
-
-“获取文件夹下的清单”节点失败时也执行同样的失败落库，`error_message`
-必须绑定清单节点的真实错误。
-
-成功出口添加更新记录节点：
-
-```text
-节点名 = B8_保存子目录白名单
-record_id = B2.request_record_id
-allowed_child_folders_json = B7.allowed_child_folders_json
-```
-
-必须先保存白名单再发送卡片，因为下一次 `browse` 回调要用这份白名单验证目录 token。
-
-更新成功后添加“发送飞书卡片”节点，选择“归档-选择目录-V2”，命名：
-
-```text
-B9_发送目录卡片
-```
-
-变量绑定：
-
-| 卡片变量 | B7 输出 |
-|---|---|
-| `selected_file_name` | `selected_file_name` |
-| `breadcrumb` | `breadcrumb` |
-| `current_folder_url` | `current_folder_url` |
-| `warning` | `warning` |
-| `initiator` | `initiator` |
-| `folder_options` | `folder_options` |
-| `disable_folder_browse` | `disable_folder_browse` |
-| `disable_back` | `disable_back` |
-| `skill_object_browse` | `skill_object_browse` |
-| `skill_object_back` | `skill_object_back` |
-| `skill_object_choose_current` | `skill_object_choose_current` |
-| `skill_object_cancel` | `skill_object_cancel` |
-
-如果发送节点要求目标会话：
-
-```text
-接收类型 = 群聊
-chat_id = B2.chat_id
-```
-
-不要从卡片自定义参数接收 `chat_id`。发送成功后本次技能 B 运行结束；用户下一次点击卡片 2 时会启动一次新的 B 运行。
-
-若保存白名单或发送卡片 2 失败，尝试把该请求更新为 `failed`，写入失败
-节点的真实错误和 `B0.1_当前时间.now_ms`，然后结束；不得继续等待一张
-实际上没有成功发出的卡片。
+1. 发布技能 B。
+2. 在测试群回复一条文件消息，@机器人发送「归档」，点击卡片 1 的「确认归档这个文件」。
+3. 打开 Base 归档请求表，核对该请求：`status` = `selecting_folder`；`selected_file_*` 已写入；`allowed_child_folders_json` 已写入当前目录的子目录清单。
+4. 核对群里收到卡片 2：显示文件名、面包屑和目录下拉框。
+5. 在卡片 2 选择一个子目录，点击「进入选中的文件夹」，核对 Base 的 `current_folder_*` 和 `folder_path_json` 变成该子目录。
+6. 任一项不符合，先按 [AGENT_HANDOFF.md](./AGENT_HANDOFF.md) 第 10 节的日志排查顺序检查，再继续第 14 步。
 
 ---
 
 ## 第 14 步：搭建最终确认和取消
 
-### 14.1 `choose_current_folder`
-
-从 `B4.2_next_step分支` 的：
-
-```text
-B4.next_step == send_confirm_card
-```
-
-出口开始。添加“更新多维表格记录”节点：
-
-```text
-节点名 = B10_保存目标目录
-record_id = B2.request_record_id
-```
-
-| 字段 | B4 输出 |
-|---|---|
-| `target_folder_token` | `target_folder_token` |
-| `target_folder_name` | `target_folder_name` |
-| `target_folder_url` | `target_folder_url_object`，object |
-| `status` | B4 `status`，应为 `waiting_confirm` |
-
-更新成功后添加 Python 节点，命名：
-
-```text
-B11_组装最终确认卡片
-```
-
-复制：
-
-[b_build_confirm_card.py](./aily_nodes/b_build_confirm_card.py)
-
-输入：
-
-| 参数 | 值 |
-|---|---|
-| `request_id` | B2 `request_id` |
-| `callback_skill_id` | 固定 `skill_xxx` |
-| `requester_id` | B2 `requester_id` |
-| `selected_file_name` | B4 `selected_file_name` |
-| `selected_file_type` | B4 `selected_file_type` |
-| `target_folder_path` | B4 `target_folder_path` |
-| `target_folder_url` | B4 `target_folder_url` |
-| `warning` | B4 `warning_message` |
-
-注意：卡片输入 `target_folder_url` 使用 B4 的字符串输出；只有上一步写 Base 时使用 `target_folder_url_object`。
-
-B11 后添加条件分支：
-
-```text
-B11.ok == false → 更新请求为 failed，写入 B11.error 和 completed_at
-                → 发送 B11.error → 结束
-B11.ok == true  → 发送卡片 3
-```
-
-成功出口添加“发送飞书卡片”节点，选择“归档-最终确认-V2”，卡片变量绑定 B11 同名输出。目标会话：
-
-```text
-接收类型 = 群聊
-chat_id = B2.chat_id
-```
-
-发送成功后结束本次 B 运行。
-
-若发送卡片 3 失败，也将请求更新为 `failed`，写入发送节点的真实错误和
-`B0.1_当前时间.now_ms`，然后结束。
-
-### 14.2 `cancel`
-
-从 `B4.2_next_step分支` 的：
-
-```text
-B4.next_step == end
-```
-
-出口添加“更新多维表格记录”节点：
-
-```text
-节点名       = B10_cancel_保存取消状态
-record_id    = B2.request_record_id
-status       = B4.status（cancelled）
-completed_at = B4.completed_at_ms
-```
-
-更新成功后直接结束，不再发送新卡片。旧卡片由按钮回调对象的 `update_card=true` 更新成“已取消本次归档”。
-
----
-
-## 第 15 步：搭建 `confirm_upload`
-
-这是 `B3.1_action分支` 中唯一不经过 B4 的出口。
-
-### 15.1 `confirm_upload` 出口：先锁定为 processing
-
-在 `B2.action == confirm_upload` 出口添加“更新多维表格记录”节点：
-
-```text
-节点名        = B12_进入处理中
-record_id     = B2.request_record_id
-status        = processing
-confirmed_at  = B0.1_当前时间.now_ms
-error_message = 空
-```
-
-只有该更新成功才能继续；失败时发送节点真实错误并结束，不能下载文件。
-
-### 15.2 重新查询最新请求
-
-添加“查询多维表格记录”节点：
-
-```text
-节点名         = B13_重查处理中请求
-Base App Token = WHaibyXvuaXuJpsDraJcAAM9nIb
-Table ID       = tblyUgvj29jAL275
-page_size      = 2
-筛选字段         = request_id
-operator         = is
-value             = B0.2.request_id_filter_values
-```
-
-再添加 Python 节点：
-
-```text
-节点名 = B14_校验处理中请求
-代码   = b5_validate_processing_request.py
-```
-
-输入：
-
-| 参数 | 绑定 |
-|---|---|
-| `request_result` | B13 完整输出 |
-| `request_id` | 开始节点 `request_id` |
-
-如果 B13 查询节点本身失败，使用 `B2.request_record_id` 尝试把请求更新为
-`failed`，写入 B13 的真实错误和完成时间，然后结束；不要继续下载。
-
-B14 后添加条件分支节点，按顺序建三个出口：
-
-| 出口 | 条件 | 处理 |
-|---|---|---|
-| 校验失败 | `B14.ok == false` | 若 `request_record_id` 非空且状态为 `processing`，更新 `failed/error_message/completed_at`；否则只发送 B14.error；然后结束 |
-| 已经处理 | `B14.ok == true AND B14.should_upload == false` | 直接结束，不再下载和上传 |
-| 可以上传 | `B14.ok == true AND B14.should_upload == true` | 进入 15.3 |
-
-B14 会输出后续所需的扁平字段，不再让你从重查结果的深层 JSON 中手工选择：
-
-```text
-chat_id
-chat_id_filter_values
-source_message_id
-selected_file_key
-selected_file_name
-selected_file_type
-target_folder_token
-target_folder_name
-target_folder_url
-target_folder_path
-```
-
-### 15.3 下载被回复的消息文件
-
-从“可以上传”出口添加“获取消息资源/下载消息附件”节点：
-
-```text
-节点名   = B15_下载消息文件
-消息 ID  = B14.source_message_id
-文件 key = B14.selected_file_key
-资源类型  = file
-```
-
-先单独调试一次该节点，记住它实际输出的“文件内容”和“文件大小”字段名；不同租户界面名称可能不同，后文简称为：
-
-```text
-B15.file_content
-B15.actual_size
-```
-
-下载节点失败出口：
-
-```text
-更新 record_id = B14.request_record_id
-status          = failed
-error_message   = 下载节点真实错误
-completed_at    = B0.1_当前时间.now_ms
-```
-
-然后进入 15.7 的失败结果卡片。
-
-### 15.4 重查群映射并校验真实文件大小
-
-下载成功出口添加“查询多维表格记录”节点：
-
-```text
-节点名         = B16_重查群映射
-Base App Token = WHaibyXvuaXuJpsDraJcAAM9nIb
-Table ID       = tblacRVYZZ4SJmWW
-View ID        = vewPOqHrk9
-page_size      = 2
-筛选字段         = chat_id
-operator         = is
-value             = B14.chat_id_filter_values
-```
-
-运行输入必须是 `"value":["oc_xxx"]`。
-
-如果 B16 查询节点本身失败，也更新请求为 `failed`，写入 B16 的真实错误，
-然后进入失败结果卡片。
-
-再添加 Python 节点：
-
-```text
-节点名 = B17_校验上传策略
-代码   = b6_validate_upload_policy.py
-```
-
-输入：
-
-| 参数 | 绑定 |
-|---|---|
-| `mapping_result` | B16 完整输出 |
-| `chat_id` | B14 `chat_id` |
-| `selected_file_type` | B14 `selected_file_type` |
-| `actual_size` | B15 实际文件字节数 |
-
-B17 后添加条件分支：
-
-```text
-B17.ok == false → 更新 failed、error_message=B17.error、completed_at → 失败结果卡片
-B17.ok == true  → 上传文件
-```
-
-该代码会验证映射唯一且启用、文件类型仍允许、真实大小大于 0，并且不超过 `min(max_file_size_mb,20)`。
-
-### 15.5 上传文件
-
-成功出口添加普通“上传文件”节点：
-
-```text
-节点名      = B18_上传文件
-文件内容     = B15 文件内容
-文件名       = B14.selected_file_name
-父目录 token = B14.target_folder_token
-文件大小     = B17.actual_size
-```
-
-上传失败出口：
-
-```text
-record_id       = B14.request_record_id
-status          = failed
-error_message   = 上传节点真实错误
-completed_at    = B0.1_当前时间.now_ms
-```
-
-然后进入失败结果卡片。
-
-### 15.6 上传成功：把结果链接转换为 Base URL object
-
-上传成功出口添加 Python 节点：
-
-```text
-节点名 = B19_转换结果链接
-代码   = common_build_url_object.py
-```
-
-输入：
-
-```text
-url  = B18 上传结果中的文件链接
-text = B14.selected_file_name
-```
-
-`B19.ok == false` 时不要写成功，改写 `failed` 并发送 `B19.error`。`B19.ok == true` 时更新请求：
-
-```text
-record_id         = B14.request_record_id
-status            = success
-result_file_token = B18 上传结果文件 token
-result_file_url   = B19.url_object       # object，不是字符串
-result_size       = B17.actual_size
-error_message     = 空
-completed_at      = B0.1_当前时间.now_ms
-```
-
-### 15.7 发送结果卡片
-
-成功和失败都使用 [b_build_result_card.py](./aily_nodes/b_build_result_card.py)。如果 Aily 不支持多个分支汇入同一个代码节点，就在成功分支和每个失败分支各复制一个结果卡片代码节点。
-
-公共输入：
-
-| 参数 | 绑定 |
-|---|---|
-| `request_id` | B14 `request_id` |
-| `requester_id` | B2 `requester_id` |
-| `selected_file_name` | B14 `selected_file_name` |
-| `selected_file_type` | B14 `selected_file_type` |
-| `target_folder_name` | B14 `target_folder_name` |
-| `target_folder_path` | B14 `target_folder_path` |
-| `target_folder_url` | B14 `target_folder_url` |
-| `completed_at` | B0.1 `now_ms` |
-
-成功分支额外绑定：
-
-```text
-status          = success
-result_file_url = B19.url
-result_size     = B17.actual_size
-error_message   = 空
-```
-
-失败分支额外绑定：
-
-```text
-status          = failed
-result_file_url = 空
-result_size     = 0 或 B17.actual_size
-error_message   = 当前失败节点的真实 error
-```
-
-结果代码 `ok=true` 后发送“归档-结果-V2”，目标会话：
-
-```text
-接收类型 = 群聊
-chat_id = B14.chat_id
-```
-
-卡片 4 没有回调按钮，发送后结束本次技能 B。
-
-当前 Base 的“先查再改”不能提供严格原子 CAS；本流程能阻止顺序重复点击，但两个真正同时到达的回调仍可能并发进入。若业务必须保证绝不重复上传，需要额外的原子幂等服务。
-
----
-
-## 第 16 步：统一错误分支、发布和验收
-
-### 16.1 统一错误分支
-
-在尚未创建请求，或校验失败不应改变请求状态时，代码节点使用：
-
-```text
-ok == true  → 继续
-ok == false → 发送当前节点.error → 结束
-```
-
-请求已经创建且当前分支无法继续时，按下表先将请求更新为 `failed`，再发送
-真实错误或失败结果卡片。不要用上面的简化规则覆盖下表。
-
-“按需”具体按下表执行：
-
-| 失败节点/阶段 | 是否更新请求 | 更新内容 | 是否继续发卡片 |
-|---|---|---|---|
-| 技能 A 读取触发消息、被回复消息或映射查询 | 否，此时请求尚未创建 | 无 | 发送真实文本错误后结束 |
-| 技能 A 创建请求记录 | 否，创建本身失败 | 无 | 发送真实文本错误后结束 |
-| 技能 A 创建请求成功，但卡片 1 组装或发送失败 | 是 | `status=failed`、`error_message=真实错误`、`completed_at=当前时间` | 不再发卡片 |
-| 技能 B 查询不到请求或命中多条 | 无法安全更新 | 无 | 发送真实文本错误，交管理员处理 |
-| B2 操作者、action、状态或白名单校验失败 | 否 | 保留原状态；`REQUEST_EXPIRED` 除外 | 发送 B2.error 后结束 |
-| `REQUEST_EXPIRED` | 是 | `status=expired`、错误和完成时间 | 发送过期提示后结束 |
-| B4 用户操作校验失败，例如根目录继续返回 | 否 | 保留可继续状态 | 发送 B4.error 后结束 |
-| 技能 B 更新请求字段失败 | 更新节点本身失败，不能假设已写入 | 不继续执行后续目录/上传节点 | 发送更新节点真实错误 |
-| 目录清单、目录卡片代码、保存白名单或发送卡片 2 失败 | 是 | `status=failed`、真实错误、完成时间 | 能发送时发送失败文本；不继续目录浏览 |
-| 最终确认卡片代码或发送卡片 3 失败 | 是 | `status=failed`、真实错误、完成时间 | 发送失败文本后结束 |
-| 把状态更新为 `processing` 失败 | 否，不允许下载 | 保留原状态 | 发送更新节点真实错误 |
-| 上传预检、下载、大小校验或上传失败 | 是 | `status=failed`、真实错误、完成时间 | 尝试发送卡片 4 失败结果 |
-| 上传成功但写回 Base 结果失败 | 写回本身失败 | 不得伪称记录已成功；日志保留上传返回 token/URL，发送文本告警并人工补记 | 不发送“已完整归档”的成功卡片 |
-| Base 已写入 `success/failed`，但卡片 4 发送失败 | 否 | 保持已落库终态 | 记录发送错误；不要把业务结果改回失败 |
-
-禁止统一写成：
-
-```text
-当前群没有找到归档目录映射
-```
-
-文件类型错误应显示：
-
-```text
-当前文件类型 .md 不在本群允许归档的类型中
-```
-
-目录权限错误、消息读取错误和上传错误也必须各自显示真实阶段。
-
-### 16.2 重新发布并刷新卡片
+### 14.1 B10 保存目标目录
+
+1. 在 B4.2 的 `发最终确认` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B10_保存目标目录`。
+2. `record_id` 绑定：`B2.request_record_id`。
+3. 字段按下表设置：
+
+   | Base 字段 | 值 |
+   |---|---|
+   | `target_folder_token` | 绑定：`B4.target_folder_token` |
+   | `target_folder_name` | 绑定：`B4.target_folder_name` |
+   | `target_folder_url` | 绑定：`B4.target_folder_url_object`（object） |
+   | `status` | 绑定：`B4.status`（运行时应为 `waiting_confirm`） |
+
+   注意：`target_folder_url` 是 Base URL 字段，必须绑定 object 输出 `B4.target_folder_url_object`，不要绑定字符串 `B4.target_folder_url`。
+
+4. B10 的失败出口：添加「发送消息」节点，内容绑定 B10 的错误输出，后面接「结束」节点。该出口不要添加更新节点。
+
+### 14.2 B11 组装并发送卡片 3
+
+1. 在 B10 的成功出口后面添加 Python 代码节点，节点名填：`B11_组装最终确认卡片`。
+2. 完整复制 [b_build_confirm_card.py](./aily_nodes/b_build_confirm_card.py) 的全部内容，粘贴到代码编辑区。
+3. 输入参数按下表绑定：
+
+   | `main()` 参数 | 绑定 |
+   |---|---|
+   | `request_id` | `B2.request_id` |
+   | `callback_skill_id` | 固定：第 3 步记录的技能 B ID（`skill_xxx`） |
+   | `requester_id` | `B2.requester_id` |
+   | `selected_file_name` | `B4.selected_file_name` |
+   | `selected_file_type` | `B4.selected_file_type` |
+   | `target_folder_path` | `B4.target_folder_path` |
+   | `target_folder_url` | `B4.target_folder_url`（字符串，卡片展示用） |
+   | `warning` | `B4.warning_message` |
+
+4. 先调试一次该节点，让 Aily 自动识别返回字段。
+5. 在 B11 后面添加「条件分支」节点，节点名填：`B11.1_B11结果分支`。
+6. 建立第 1 个分支，分支名填：`B11失败`。条件：左值绑定 `B11.ok`，运算符「等于」，右值布尔 `false`。
+7. 建立第 2 个分支，分支名填：`B11成功`。条件：左值绑定 `B11.ok`，运算符「等于」，右值布尔 `true`。
+8. 在 `B11失败` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B11失败_写入failed`。`record_id` 绑定 `B2.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定 `B11.error`；`completed_at` 绑定 `B0.1_当前时间.now_ms`。
+9. 在 `B11失败_写入failed` 后面添加「发送消息」节点，内容绑定 `B11.error`，后面接「结束」节点。
+10. 在 `B11成功` 分支后面添加「发送飞书卡片」节点，节点名填：`发送卡片3_最终确认`，卡片模板选：`归档-最终确认-V2`。
+11. 卡片变量按下表绑定（全部绑定 B11 同名输出）：
+
+    | 卡片变量 | 绑定 |
+    |---|---|
+    | `request_id_text` | `B11.request_id_text` |
+    | `selected_file_name` | `B11.selected_file_name` |
+    | `selected_file_type` | `B11.selected_file_type` |
+    | `target_folder_path` | `B11.target_folder_path` |
+    | `target_folder_url` | `B11.target_folder_url` |
+    | `warning` | `B11.warning` |
+    | `initiator` | `B11.initiator` |
+    | `skill_object_confirm` | `B11.skill_object_confirm` |
+    | `skill_object_return` | `B11.skill_object_return` |
+    | `skill_object_cancel` | `B11.skill_object_cancel` |
+
+12. 接收会话：接收类型选「群聊」，`chat_id` 绑定：`B2.chat_id`。
+13. 该发送节点的失败出口：添加「更新多维表格记录」节点（归档请求表），节点名填：`卡片3失败_写入failed`。`record_id` 绑定 `B2.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定该发送节点的错误输出；`completed_at` 绑定 `B0.1_当前时间.now_ms`。后面接「结束」节点。
+14. 该发送节点的成功出口接「结束」节点。
+
+### 14.3 cancel 落库
+
+1. 在 B4.2 的 `取消结束` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B10_cancel_保存取消状态`。
+2. `record_id` 绑定：`B2.request_record_id`。
+3. 字段按下表设置：
+
+   | Base 字段 | 值 |
+   |---|---|
+   | `status` | 绑定：`B4.status`（运行时应为 `cancelled`） |
+   | `completed_at` | 绑定：`B4.completed_at_ms` |
+
+4. 该更新节点的失败出口：添加「发送消息」节点，内容绑定该更新节点的错误输出，后面接「结束」节点。
+5. 该更新节点的成功出口接「结束」节点。取消分支不发送任何新卡片，旧卡片会由按钮回调对象的 `update_card=true` 自动更新为「已取消本次归档」。
+
+### 14.4 联调检查点：卡片 3 和取消
 
 1. 发布技能 B。
-2. 确认技能 B ID 没变；如变更，更新所有代码节点的 `callback_skill_id`。
+2. 完整走一遍：回复文件消息 @机器人发「归档」→ 卡片 1 点「确认归档这个文件」→ 卡片 2 点「使用当前目录」。
+3. 核对：群里收到卡片 3；Base 该请求 `status` = `waiting_confirm`，`target_folder_*` 已写入；此时云盘目录里不应出现文件。
+4. 在卡片 3 点「返回重新选择」，核对：收到新的卡片 2；Base `status` 回到 `selecting_folder`，`target_folder_token` 已清空。
+5. 重新走到卡片 3，点「取消」，核对：Base `status` = `cancelled`，`completed_at` 非空，旧卡片显示「已取消本次归档」。
+6. 任一项不符合，先查日志，再继续第 15 步。
+
+---
+
+## 第 15 步：搭建 confirm_upload
+
+本步从 B3.1 的 `确认上传` 分支开始搭建，这是唯一不经过 B4 的 action。15.1–15.10 先搭主链，失败出口全部暂时悬空；15.11 统一搭建失败处理段并接线。
+
+### 15.1 B12 锁定 processing
+
+1. 在 B3.1 的 `确认上传` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B12_进入处理中`。
+2. `record_id` 绑定：`B2.request_record_id`。
+3. 字段按下表设置：
+
+   | Base 字段 | 值 |
+   |---|---|
+   | `status` | 固定：选单选值 `processing` |
+   | `confirmed_at` | 绑定：`B0.1_当前时间.now_ms` |
+   | `error_message` | 添加该字段，值留空（清空旧错误） |
+
+4. B12 的失败出口：添加「发送消息」节点，内容绑定 B12 的错误输出，后面接「结束」节点。该失败出口后面禁止连接任何下载节点。
+
+### 15.2 B13 重查处理中请求
+
+1. 在 B12 的成功出口后面添加「查询多维表格记录」节点（归档请求表），节点名填：`B13_重查处理中请求`。
+2. `page_size` 固定：`2`。
+3. 筛选条件：字段选 `request_id`，operator 选 `is`，`value` 绑定：`B0.2.request_id_filter_values`（整个数组，不要绑定数组第 0 项）。
+4. B13 的失败出口：添加「更新多维表格记录」节点（归档请求表），节点名填：`B13失败_写入failed`。`record_id` 绑定 `B2.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定 B13 的错误输出；`completed_at` 绑定 `B0.1_当前时间.now_ms`。
+5. 在 `B13失败_写入failed` 后面添加「发送消息」节点，内容绑定 B13 的错误输出，后面接「结束」节点。
+
+### 15.3 B14 校验处理中请求
+
+1. 在 B13 的成功出口后面添加 Python 代码节点，节点名填：`B14_校验处理中请求`。
+2. 完整复制 [b5_validate_processing_request.py](./aily_nodes/b5_validate_processing_request.py) 的全部内容，粘贴到代码编辑区。
+3. 输入参数按下表绑定：
+
+   | `main()` 参数 | 绑定 |
+   |---|---|
+   | `request_result` | `B13_重查处理中请求` 完整输出 |
+   | `request_id` | 开始节点 `request_id` |
+
+4. 先调试一次该节点，让 Aily 自动识别返回字段。
+5. 在 B14 后面添加「条件分支」节点，节点名填：`B14.1_上传前校验分支`。
+6. 按下面的顺序建立 3 个分支：
+
+   | 顺序 | 分支名 | 条件 |
+   |---|---|---|
+   | 1 | `校验失败` | 左值绑定 `B14.ok`，等于，布尔 `false` |
+   | 2 | `已经处理` | 左值绑定 `B14.ok`，等于，布尔 `true`；且左值绑定 `B14.should_upload`，等于，布尔 `false` |
+   | 3 | `可以上传` | 左值绑定 `B14.ok`，等于，布尔 `true`；且左值绑定 `B14.should_upload`，等于，布尔 `true` |
+
+7. 在 `已经处理` 分支后面直接添加「结束」节点。
+8. 在 `校验失败` 分支后面添加「条件分支」节点，节点名填：`B14.2_安全落库判断`。
+9. 在 B14.2 建立第 1 个分支，分支名填：`可以落库`。按下表建 2 个条件，条件之间选「且 / AND」：
+
+    | 序号 | 左值 | 运算符 | 右值 |
+    |---|---|---|---|
+    | 1 | 绑定：`B14.request_record_id` | 非空 | 无 |
+    | 2 | 绑定：`B14.status` | 等于 | 固定：`processing` |
+
+10. 在 `可以落库` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B14失败_写入failed`。`record_id` 绑定 `B14.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定 `B14.error`；`completed_at` 绑定 `B0.1_当前时间.now_ms`。
+11. 在 `B14失败_写入failed` 后面添加「发送消息」节点，内容绑定 `B14.error`，后面接「结束」节点。
+12. 在 B14.2 建立第 2 个分支（否则分支），分支名填：`只发错误`。在该分支后面添加「发送消息」节点，内容绑定 `B14.error`，后面接「结束」节点。
+13. `可以上传` 分支接 15.4。
+
+### 15.4 B15 下载消息文件
+
+1. 在 `可以上传` 分支后面添加「获取消息资源」节点，节点名填：`B15_下载消息文件`。
+2. 参数按下表设置：
+
+   | 参数 | 值 |
+   |---|---|
+   | 消息 ID | 绑定：`B14.source_message_id` |
+   | 文件 key | 绑定：`B14.selected_file_key` |
+   | 资源类型 | 固定：`file` |
+
+3. 先单独调试该节点：打开 Base 归档请求表，复制一条测试请求的 `source_message_id` 和 `selected_file_key`，填入调试参数运行一次。
+4. 在调试输出中确认两个真实字段名：「文件内容」字段和「文件大小」字段。本手册后文写作 `B15.file_content` 和 `B15.actual_size`，实际绑定时选你界面里的真实字段名。
+5. B15 的失败出口暂时悬空，15.11 统一处理。
+
+### 15.5 B16 重查群映射
+
+1. 在 B15 的成功出口后面添加「查询多维表格记录」节点（群目录映射表，填 View ID），节点名填：`B16_重查群映射`。
+2. `page_size` 固定：`2`。
+3. 筛选条件：字段选 `chat_id`，operator 选 `is`，`value` 绑定：`B14.chat_id_filter_values`（整个数组，运行输入必须是 `"value":["oc_xxx"]`，不能是 `"value":"oc_xxx"`）。
+4. B16 的失败出口暂时悬空，15.11 统一处理。
+
+### 15.6 B17 校验上传策略
+
+1. 在 B16 的成功出口后面添加 Python 代码节点，节点名填：`B17_校验上传策略`。
+2. 完整复制 [b6_validate_upload_policy.py](./aily_nodes/b6_validate_upload_policy.py) 的全部内容，粘贴到代码编辑区。
+3. 输入参数按下表绑定：
+
+   | `main()` 参数 | 绑定 |
+   |---|---|
+   | `mapping_result` | `B16_重查群映射` 完整输出 |
+   | `chat_id` | `B14.chat_id` |
+   | `selected_file_type` | `B14.selected_file_type` |
+   | `actual_size` | `B15.actual_size`（15.4 第 4 步确认的真实大小字段） |
+
+4. 先调试一次该节点，让 Aily 自动识别返回字段。
+5. 在 B17 后面添加「条件分支」节点，节点名填：`B17.1_B17结果分支`。
+6. 建立第 1 个分支，分支名填：`B17失败`。条件：左值绑定 `B17.ok`，运算符「等于」，右值布尔 `false`。
+7. 建立第 2 个分支，分支名填：`B17成功`。条件：左值绑定 `B17.ok`，运算符「等于」，右值布尔 `true`。
+8. `B17失败` 分支暂时悬空，15.11 统一处理。`B17成功` 分支接 15.7。
+
+### 15.7 B18 上传文件
+
+1. 在 `B17成功` 分支后面添加「上传文件」节点，节点名填：`B18_上传文件`。
+2. 参数按下表设置：
+
+   | 参数 | 绑定 |
+   |---|---|
+   | 文件内容 | `B15.file_content`（15.4 第 4 步确认的真实内容字段） |
+   | 文件名 | `B14.selected_file_name` |
+   | 父目录 token | `B14.target_folder_token` |
+   | 文件大小 | `B17.actual_size` |
+
+3. B18 的失败出口暂时悬空，15.11 统一处理。
+
+### 15.8 B19 转换结果链接
+
+1. 在 B18 的成功出口后面添加 Python 代码节点，节点名填：`B19_转换结果链接`。
+2. 完整复制 [common_build_url_object.py](./aily_nodes/common_build_url_object.py) 的全部内容，粘贴到代码编辑区。
+3. 输入参数按下表绑定：
+
+   | `main()` 参数 | 绑定 |
+   |---|---|
+   | `url` | `B18_上传文件` 上传结果中的文件链接字段 |
+   | `text` | `B14.selected_file_name` |
+
+4. 先调试一次该节点，让 Aily 自动识别返回字段。
+5. 在 B19 后面添加「条件分支」节点，节点名填：`B19.1_B19结果分支`。
+6. 建立第 1 个分支，分支名填：`B19失败`。条件：左值绑定 `B19.ok`，运算符「等于」，右值布尔 `false`。
+7. 建立第 2 个分支，分支名填：`B19成功`。条件：左值绑定 `B19.ok`，运算符「等于」，右值布尔 `true`。
+8. `B19失败` 分支暂时悬空，15.11 统一处理。`B19成功` 分支接 15.9。
+
+### 15.9 B20 写回归档成功
+
+1. 在 `B19成功` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B20_写回归档成功`。
+2. `record_id` 绑定：`B14.request_record_id`。
+3. 字段按下表设置：
+
+   | Base 字段 | 值 |
+   |---|---|
+   | `status` | 固定：选单选值 `success` |
+   | `result_file_token` | 绑定：`B18_上传文件` 上传结果中的文件 token |
+   | `result_file_url` | 绑定：`B19.url_object`（object，不是字符串 `B19.url`） |
+   | `result_size` | 绑定：`B17.actual_size` |
+   | `error_message` | 添加该字段，值留空 |
+   | `completed_at` | 绑定：`B0.1_当前时间.now_ms` |
+
+4. B20 的失败出口：添加「发送消息」节点，节点名填：`发送人工补记告警`。消息内容输入以下文本，并用变量选择器把三处值插进去：
+
+   ```text
+   文件已上传但归档结果写回 Base 失败，请管理员人工补记。
+   请求：{{B14.request_id}}；文件 token：{{B18 上传结果文件 token}}；链接：{{B19.url}}。
+   ```
+
+5. 在 `发送人工补记告警` 后面添加「结束」节点。该失败出口不要发送成功结果卡片，不要再改 Base 状态。
+
+### 15.10 B21/B22 组装并发送成功结果卡片
+
+1. 在 B20 的成功出口后面添加 Python 代码节点，节点名填：`B21_组装成功结果卡片`。
+2. 完整复制 [b_build_result_card.py](./aily_nodes/b_build_result_card.py) 的全部内容，粘贴到代码编辑区。
+3. 输入参数按下表绑定：
+
+   | `main()` 参数 | 值 |
+   |---|---|
+   | `status` | 固定：`success` |
+   | `request_id` | 绑定：`B14.request_id` |
+   | `requester_id` | 绑定：`B2.requester_id` |
+   | `selected_file_name` | 绑定：`B14.selected_file_name` |
+   | `selected_file_type` | 绑定：`B14.selected_file_type` |
+   | `target_folder_name` | 绑定：`B14.target_folder_name` |
+   | `target_folder_path` | 绑定：`B14.target_folder_path` |
+   | `target_folder_url` | 绑定：`B14.target_folder_url` |
+   | `result_file_url` | 绑定：`B19.url`（字符串） |
+   | `result_size` | 绑定：`B17.actual_size` |
+   | `completed_at` | 绑定：`B0.1_当前时间.now_ms` |
+   | `error_message` | 留空 |
+
+4. 先调试一次该节点，让 Aily 自动识别返回字段。
+5. 在 B21 后面添加「发送飞书卡片」节点，节点名填：`B22_发送成功结果卡片`，卡片模板选：`归档-结果-V2`。
+6. 卡片 14 个变量全部绑定 B21 的同名输出：`is_success`、`result_title`、`result_summary`、`request_id_text`、`selected_file_name`、`selected_file_type`、`target_folder_name`、`target_folder_path`、`target_folder_url`、`result_file_url`、`result_size_text`、`completed_at_text`、`error_message`、`initiator`。
+7. 接收会话：接收类型选「群聊」，`chat_id` 绑定：`B14.chat_id`。
+8. B22 的失败出口直接接「结束」节点（Base 已写入终态，不再改单）。B22 的成功出口也接「结束」节点。
+
+### 15.11 搭建标准失败段并接线（共 5 套）
+
+15.4–15.8 留下了 5 个失败出口。按以下步骤搭一套失败处理段，再复制成 5 套。
+
+**第 1 步：搭建第一套（B15 下载失败）**
+
+1. 在 B15 的失败出口后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B15失败_写入failed`。`record_id` 绑定 `B14.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定 B15 的错误输出；`completed_at` 绑定 `B0.1_当前时间.now_ms`。
+2. 在 `B15失败_写入failed` 后面添加 Python 代码节点，节点名填：`B15失败_组装结果卡片`。完整复制 [b_build_result_card.py](./aily_nodes/b_build_result_card.py) 的全部内容。
+3. 输入参数按下表绑定：
+
+   | `main()` 参数 | 值 |
+   |---|---|
+   | `status` | 固定：`failed` |
+   | `request_id` | 绑定：`B14.request_id` |
+   | `requester_id` | 绑定：`B2.requester_id` |
+   | `selected_file_name` | 绑定：`B14.selected_file_name` |
+   | `selected_file_type` | 绑定：`B14.selected_file_type` |
+   | `target_folder_name` | 绑定：`B14.target_folder_name` |
+   | `target_folder_path` | 绑定：`B14.target_folder_path` |
+   | `target_folder_url` | 绑定：`B14.target_folder_url` |
+   | `result_file_url` | 留空 |
+   | `result_size` | 固定：`0` |
+   | `completed_at` | 绑定：`B0.1_当前时间.now_ms` |
+   | `error_message` | 绑定：B15 的错误输出 |
+
+4. 在该代码节点后面添加「发送飞书卡片」节点，节点名填：`B15失败_发送结果卡片`，卡片模板选：`归档-结果-V2`。卡片 14 个变量全部绑定 `B15失败_组装结果卡片` 的同名输出。接收会话：群聊，`chat_id` 绑定 `B14.chat_id`。
+5. 该发送节点的失败出口直接接「结束」节点；成功出口也接「结束」节点。
+
+**第 2 步：复制出其余 4 套**
+
+把第一套的三个节点整体复制 4 次，接到对应的失败出口，只改节点名和 `error_message` 的绑定来源，其余绑定不变：
+
+| 套 | 接到哪个失败出口 | 三个节点名 | `error_message` 绑定 |
+|---|---|---|---|
+| 2 | B16 失败出口 | `B16失败_写入failed` / `B16失败_组装结果卡片` / `B16失败_发送结果卡片` | B16 的错误输出 |
+| 3 | B17.1 的 `B17失败` 分支 | `B17失败_写入failed` / `B17失败_组装结果卡片` / `B17失败_发送结果卡片` | `B17.error` |
+| 4 | B18 失败出口 | `B18失败_写入failed` / `B18失败_组装结果卡片` / `B18失败_发送结果卡片` | B18 的错误输出 |
+| 5 | B19.1 的 `B19失败` 分支 | `B19失败_写入failed` / `B19失败_组装结果卡片` / `B19失败_发送结果卡片` | `B19.error` |
+
+**第 3 步：核对**
+
+5 套失败段的 `error_message` 必须各自绑定对应节点的真实错误，不能 5 套都绑同一个节点的错误。
+
+### 15.12 联调检查点：真实上传
+
+1. 发布技能 B。
+2. 完整走一遍：回复文件消息 @机器人发「归档」→ 卡片 1 确认 → 卡片 2 选目录 → 卡片 3 点「确认上传」。
+3. 核对 Base 该请求：`status` = `success`；`result_file_token`、`result_file_url`、`result_size`、`completed_at` 非空。
+4. 核对云盘目标目录里真实出现了该文件。
+5. 核对群里收到卡片 4，显示「归档成功」和文件链接。
+6. 上传失败时核对：Base 写入 `failed` 和真实错误，群里收到卡片 4 显示「归档失败」和失败原因。
+
+---
+
+## 第 16 步：核对、发布和验收
+
+### 16.1 逐项核对失败连线
+
+只核对，不新增节点。逐条对照画布打勾：
+
+- [ ] B3 的 `已过期` 分支：写入 `expired` + `B2.error` + `completed_at`，然后发送 `B2.error` 并结束。
+- [ ] B3 的 `其他失败` 分支：只有发送 `B2.error` 和结束，没有任何更新节点。
+- [ ] B4.1 的 `B4失败` 分支：只有发送 `B4.error` 和结束，没有更新节点。
+- [ ] B6、B7、B8、B9 失败：各自写入 `failed` + 该节点真实错误 + `completed_at`，不继续发卡片 2。
+- [ ] B10 失败：只发送 B10 的真实错误，没有更新节点。
+- [ ] B11 失败、`发送卡片3_最终确认` 失败：各自写入 `failed` + 真实错误 + `completed_at`。
+- [ ] B12 失败：只发送 B12 的真实错误，失败出口后面没有任何下载节点。
+- [ ] B13、B14 失败：按 15.2 / 15.3 落库或发错误。
+- [ ] B15–B19 的 5 套失败段：`error_message` 分别绑定各自节点的真实错误。
+- [ ] B20 失败：只发人工补记告警，不发成功结果卡片。
+- [ ] 所有发送卡片 4 的节点失败：直接结束，不再改 Base。
+- [ ] 全文检查所有「发送消息」和 `error_message` 绑定：没有任何一处把错误写死成「当前群没有找到归档目录映射」。
+
+### 16.2 发布
+
+1. 发布技能 B。
+2. 确认技能 B 的 skill_id 与第 3 步记录的 `CALLBACK_SKILL_ID` 相同。如果变了，更新三处 `callback_skill_id`：技能 A 的 A8 输入、B7 输入、B11 输入。
 3. 发布四张卡片。
-4. 回到每个“发送飞书卡片”节点点击“更新/刷新模板”。
+4. 逐个打开以下「发送飞书卡片」节点，点击「更新 / 刷新模板」：技能 A 的 A10、B9、`发送卡片3_最终确认`、B22、5 套失败段的发送结果卡片节点。
 5. 发布技能 A。
 6. 发布整个 Aily 应用。
 
@@ -2084,25 +1952,44 @@ B0.2 Python：b0_prepare_request_filter.py
 B0.3 条件分支：筛选参数成功 / 失败
 B1 按 request_id 查询请求
 B2 Python：b2_validate_callback.py
-B3 条件分支：校验成功 / 已过期 / 其他失败
+B3 条件分支：已过期 / 其他失败 / 校验成功
 B3.1 条件分支：七个 action
 B4 Python：b3_prepare_action.py
 B4.1 条件分支：B4 成功 / 失败
 B4.2 条件分支：list_folder / send_confirm_card / end
-
-目录公共段：
 B4.3 条件分支：choose_file / browse / back / return_folder
-→ 各自更新请求 → 读取目录清单 → b_build_folder_card.py
-→ 保存子目录白名单 → 卡片 2
-
-最终确认段：
-更新 target/status → b_build_confirm_card.py → 卡片 3
-
-上传段：
-processing → 重查 → b5_validate_processing_request.py
-→ 下载 → 重查映射 → b6_validate_upload_policy.py
-→ 上传 → common_build_url_object.py → 写结果
-→ b_build_result_card.py → 卡片 4
+B5_choose_file_保存文件（更新记录）
+B5_browse_保存当前目录（更新记录）
+B5_back_保存上级目录（更新记录）
+B5_return_folder_清空目标目录（更新记录）
+B6_读取当前目录清单
+B7 Python：b_build_folder_card.py
+B7.1 条件分支：B7 成功 / 失败
+B8_保存子目录白名单（更新记录）
+B9_发送目录卡片（卡片 2）
+B10_保存目标目录（更新记录）
+B11 Python：b_build_confirm_card.py
+B11.1 条件分支：B11 成功 / 失败
+发送卡片3_最终确认（卡片 3）
+B10_cancel_保存取消状态（更新记录）
+B12_进入处理中（更新记录）
+B13_重查处理中请求
+B14 Python：b5_validate_processing_request.py
+B14.1 条件分支：校验失败 / 已经处理 / 可以上传
+B14.2 条件分支：可以落库 / 只发错误
+B15_下载消息文件
+B16_重查群映射
+B17 Python：b6_validate_upload_policy.py
+B17.1 条件分支：B17 成功 / 失败
+B18_上传文件
+B19 Python：common_build_url_object.py
+B19.1 条件分支：B19 成功 / 失败
+B20_写回归档成功（更新记录）
+B21 Python：b_build_result_card.py（成功）
+B22_发送成功结果卡片（卡片 4）
+失败处理段（更新 failed → Python b_build_result_card.py → 卡片 4）：
+  B6 / B7 / B8 / B9 / B11 / 卡片3发送 / B13 / B14 的失败分支（仅落库 + 文本错误）
+  B15 / B16 / B17 / B18 / B19 的失败分支（落库 + 失败结果卡片）
 ```
 
 ## 代码文件对应表
