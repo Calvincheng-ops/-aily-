@@ -262,6 +262,19 @@ xxx_url_object   对象，仅用于写入 Base URL 字段
 - `target_folder_url`
 - `result_file_url`
 
+2026-08-06 线上验证：技能 A 创建归档请求节点的成功运行输入中，URL 字段的实际
+提交值仅含 `link` 与 `text` 两个键，不带 `type` 键：
+
+```json
+"root_folder_url_snapshot": {
+  "link": "https://westoeast.feishu.cn/drive/folder/xxx",
+  "text": "测试文件夹"
+}
+```
+
+同一次运行中 `expires_at` 以 float 毫秒数字提交成功；数字类字段只要不用引号
+包裹即可通过。
+
 ### 6.2 日期时间字段必须传毫秒数字
 
 Base 日期时间字段应传 Unix 毫秒数字：

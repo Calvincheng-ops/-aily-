@@ -15,22 +15,22 @@ flowchart TB
 
     subgraph SB["技能 B：处理卡片点击"]
         direction TB
-        B03["B0–B3.1<br/>读取 4 个开始参数和点击人<br/>数组化 request_id、查 Base、校验状态"]
-        ACTION{"B3.1 action 条件分支"}
+        B03["B0–B3<br/>读取 4 个开始参数和点击人<br/>数组化 request_id、查 Base、校验状态"]
+        ACTION{"B3.1<br/>是否 confirm_upload"}
         B03 --> ACTION
 
-        ACTION -->|"choose_file / browse / back / return_folder"| B49["B4–B9<br/>准备并保存状态<br/>读取目录、保存白名单、发送卡片 2"]
+        ACTION -->|"其他动作（默认分支）"| B4["B4 准备状态更新"]
+        B4 --> NEXT{"B4.2<br/>next_step"}
+        NEXT -->|"list_folder"| B49["B4.3–B9<br/>四个目录动作分别落库<br/>读目录、存白名单、发卡片 2"]
         B49 --> C2["卡片 2<br/>浏览目录或使用当前目录"]
-
-        ACTION -->|"choose_current_folder"| B1011["B10–B11<br/>保存 target_folder<br/>改为 waiting_confirm 并发送卡片 3"]
+        NEXT -->|"send_confirm_card"| B1011["B10–B11<br/>保存 target_folder<br/>改为 waiting_confirm 并发送卡片 3"]
         B1011 --> C3["卡片 3<br/>最终确认、返回或取消"]
+        NEXT -->|"end"| BCANCEL["写入 cancelled<br/>记录 completed_at 后结束"]
 
-        ACTION -->|"cancel"| BCANCEL["写入 cancelled<br/>记录 completed_at 后结束"]
-
-        ACTION -->|"confirm_upload"| B1219["B12–B19<br/>processing → 重查请求 → 下载<br/>重查映射与真实大小 → 上传 → 写回结果"]
+        ACTION -->|"confirm_upload"| B1219["B12–B19<br/>processing → 重查请求 → 下载<br/>重查映射与真实大小 → 上传"]
         B1219 --> RESULT{"上传结果"}
-        RESULT -->|"成功"| BS["写入 success<br/>result token / URL / size"]
-        RESULT -->|"失败"| BF["写入 failed<br/>真实 error / completed_at"]
+        RESULT -->|"成功"| BS["B20–B22<br/>写入 success 与结果字段<br/>发送成功结果卡片"]
+        RESULT -->|"失败"| BF["失败处理段<br/>写入 failed 与真实错误<br/>发送失败结果卡片"]
         BS --> C4["卡片 4：归档结果"]
         BF --> C4
     end
