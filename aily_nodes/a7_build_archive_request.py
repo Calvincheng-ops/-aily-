@@ -19,6 +19,7 @@ from typing import Any, Dict, List
 
 REQUEST_TTL_MS = 30 * 60 * 1000
 SINGLE_UPLOAD_MAX_MB = 20
+MAX_UPLOAD_MB = 100
 
 
 def _load_json(value: Any, default: Any) -> Any:
@@ -378,12 +379,11 @@ def main(
             "FILE_SIZE_CONFIG_INVALID",
             "群目录映射的最大文件大小配置无效。",
         )
-    if max_size_mb > SINGLE_UPLOAD_MAX_MB:
+    if max_size_mb > MAX_UPLOAD_MB:
         return _fail(
             result,
             "FILE_SIZE_CONFIG_UNSUPPORTED",
-            "当前流程使用普通上传节点，max_file_size_mb 不能超过 "
-            f"{SINGLE_UPLOAD_MAX_MB}；更大文件必须另建分片上传流程。",
+            f"max_file_size_mb 不能超过 {MAX_UPLOAD_MB}（飞书消息资源下载接口限制 100 MB）。",
         )
     if file_size and file_size > max_size_mb * 1024 * 1024:
         return _fail(

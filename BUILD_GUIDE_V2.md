@@ -127,7 +127,7 @@ tblacRVYZZ4SJmWW
 | `root_folder_url` | URL | 完整文件夹链接 |
 | `enabled` | 复选框 | 必须勾选 |
 | `allowed_file_types` | 多选 | 小写、不带点 |
-| `max_file_size_mb` | 数字 | 当前流程只能填 `1..20` |
+| `max_file_size_mb` | 数字 | 填 `1..100`（≤20 普通上传，>20 自动分片） |
 | `only_file_sender_can_archive` | 复选框 | 默认不勾选 |
 
 当前测试记录应至少满足：
@@ -224,6 +224,7 @@ expired
 - [ ] `allowed_file_types` 包含准备测试的扩展名。
 - [ ] 根目录 token、名称、URL 都非空。
 - [ ] “归档请求”字段和状态值已核对。
+- [ ] 根目录文件夹已共享给机器人所在应用的身份（可编辑）。**每新增一个群的映射都必须做这一步**，否则上传报 `1061004 forbidden`（2026-08-07 实测）。
 
 ---
 
@@ -1608,7 +1609,7 @@ B3.1 只负责把 `confirm_upload` 和其他 6 个 action 分开；6 个非上�
    | `parent_node` | `B14.target_folder_token` |
    | `app_id` / `app_secret` | 留空（使用代码内常量） |
 
-5. 先调试一次该节点。成功输出：`ok = true`、`file_token` 非空、`file_url` 已拼接完成、`actual_size` 为真实字节数。该节点内置空文件和 20 MB 上限校验（`FILE_EMPTY` / `FILE_TOO_LARGE`），若报 `TOKEN_FAILED` 且是网络错误，说明代码节点不能联网，停止施工并排查。
+5. 先调试一次该节点。成功输出：`ok = true`、`file_token` 非空、`file_url` 已拼接完成、`actual_size` 为真实字节数。该节点内置空文件校验和大小限制（≤20 MB 普通上传，>20 MB 自动分片上传，硬上限 100 MB（飞书消息资源下载接口限制，错误码 234037）），若报 `TOKEN_FAILED` 且是网络错误，说明代码节点不能联网，停止施工并排查。
 6. B15 的失败出口暂时悬空，15.11 统一处理。成功出口接 15.8 的 B19。
 
 ### 15.5 B16 重查群映射（v2 增补，v1 跳过）
@@ -1968,7 +1969,7 @@ B22_发送成功结果卡片（卡片 4）
 | [b3_prepare_action.py](./aily_nodes/b3_prepare_action.py) | 技能 B / B4：六个非上传 action 状态转换 |
 | [b5_validate_processing_request.py](./aily_nodes/b5_validate_processing_request.py) | 技能 B / B14：上传前重查并展开可信请求字段 |
 | [b8_compute_actual_size.py](./aily_nodes/b8_compute_actual_size.py) | 技能 B / B15.5：计算下载内容的真实字节数（v2 用，v1 已并入 b9） |
-| [b9_download_and_upload.py](./aily_nodes/b9_download_and_upload.py) | 技能 B / B15：下载消息资源并上传云盘（单节点，内置 20 MB 校验） |
+| [b9_download_and_upload.py](./aily_nodes/b9_download_and_upload.py) | 技能 B / B15：下载消息资源并上传云盘（单节点；>20 MB 自动分片，硬上限 100 MB（飞书消息资源下载接口限制，错误码 234037）） |
 | [b6_validate_upload_policy.py](./aily_nodes/b6_validate_upload_policy.py) | 技能 B / B17：校验最新群映射、文件类型和真实字节数 |
 | [common_build_url_object.py](./aily_nodes/common_build_url_object.py) | 技能 B / B19：把 URL 字符串转换为 Base 超链接 object |
 | [b_build_folder_card.py](./aily_nodes/b_build_folder_card.py) | 技能 B：卡片 2 |

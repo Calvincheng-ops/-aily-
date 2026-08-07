@@ -240,9 +240,9 @@ class SkillANodeTests(unittest.TestCase):
         self.assertFalse(context["ok"])
         self.assertEqual(context["error_code"], "FILE_TOO_LARGE")
 
-    def test_single_upload_configuration_cannot_exceed_twenty_mb(self):
+    def test_upload_configuration_cannot_exceed_chunked_limit(self):
         mapping = mapping_payload()
-        mapping["data"]["items"][0]["fields"]["max_file_size_mb"] = 21
+        mapping["data"]["items"][0]["fields"]["max_file_size_mb"] = 101
         context = build_request(
             mapping,
             trigger_payload(),
@@ -255,6 +255,21 @@ class SkillANodeTests(unittest.TestCase):
 
         self.assertFalse(context["ok"])
         self.assertEqual(context["error_code"], "FILE_SIZE_CONFIG_UNSUPPORTED")
+
+    def test_upload_configuration_allows_up_to_hundred_mb(self):
+        mapping = mapping_payload()
+        mapping["data"]["items"][0]["fields"]["max_file_size_mb"] = 50
+        context = build_request(
+            mapping,
+            trigger_payload(),
+            replied_file_payload(),
+            CHAT_ID,
+            USER_ID,
+            TRIGGER_ID,
+            now_ms=1000,
+        )
+
+        self.assertTrue(context["ok"])
 
     def test_other_users_file_is_allowed_by_default(self):
         context = build_request(
@@ -761,7 +776,7 @@ class DownloadUploadNodeTests(unittest.TestCase):
         self.assertIn("no permission", result["error"])
 
     def test_oversize_content_is_rejected_before_upload(self):
-        big = b"a" * (20 * 1024 * 1024 + 1)
+        big = b"a" * (100 * 1024 * 1024 + 1)
         responses = [
             _FakeHttpResponse(json.dumps({"tenant_access_token": "t-1"}).encode()),
             _FakeHttpResponse(big),
@@ -782,6 +797,80 @@ class DownloadUploadNodeTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_code"], "FILE_TOO_LARGE")
         self.assertEqual(mocked.call_count, 2)
+
+    def test_oversize_download_error_maps_to_file_too_large(self):
+        responses = [
+            _FakeHttpResponse(json.dumps({"tenant_access_token": "t-1"}).encode()),
+            _FakeHttpResponse(
+                json.dumps(
+                    {"code": 234037, "msg": "Downloaded file size exceeds limit."}
+                ).encode(),
+                status=400,
+            ),
+        ]
+        with mock.patch(
+            "aily_nodes.b9_download_and_upload.urlopen",
+            side_effect=responses,
+        ):
+            result = download_and_upload(
+                "om_x",
+                "file_key",
+                "big.zip",
+                "fld_x",
+                app_id="id",
+                app_secret="secret",
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "FILE_TOO_LARGE")
+        self.assertIn("100 MB", result["error"])
+
+    def test_large_file_uses_chunked_upload(self):
+        content = b"c" * (21 * 1024 * 1024)
+        block_size = 4 * 1024 * 1024
+        block_num = 6  # ceil(21 MiB / 4 MiB)
+        responses = [
+            _FakeHttpResponse(json.dumps({"tenant_access_token": "t-1"}).encode()),
+            _FakeHttpResponse(content),
+            _FakeHttpResponse(
+                json.dumps(
+                    {
+                        "code": 0,
+                        "data": {
+                            "upload_id": "up_1",
+                            "block_size": block_size,
+                            "block_num": block_num,
+                        },
+                    }
+                ).encode()
+            ),
+        ]
+        responses += [
+            _FakeHttpResponse(json.dumps({"code": 0, "data": {}}).encode())
+            for _ in range(block_num)
+        ]
+        responses.append(
+            _FakeHttpResponse(
+                json.dumps({"code": 0, "data": {"file_token": "ft_big"}}).encode()
+            )
+        )
+        with mock.patch(
+            "aily_nodes.b9_download_and_upload.urlopen",
+            side_effect=responses,
+        ) as mocked:
+            result = download_and_upload(
+                "om_x",
+                "file_key",
+                "big.pdf",
+                "fld_x",
+                app_id="id",
+                app_secret="secret",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["file_token"], "ft_big")
+        self.assertEqual(result["actual_size"], len(content))
+        self.assertEqual(mocked.call_count, 2 + 1 + block_num + 1)
 
 
 if __name__ == "__main__":

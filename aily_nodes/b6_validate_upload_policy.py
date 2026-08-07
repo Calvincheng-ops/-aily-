@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 
 SINGLE_UPLOAD_MAX_MB = 20
+MAX_UPLOAD_MB = 100
 
 
 def _load_json(value: Any, default: Any) -> Any:
@@ -124,7 +125,7 @@ def main(
     enabled = _boolean(fields.get("enabled"))
     allowed_types = _extensions(fields.get("allowed_file_types"))
     max_mb = _integer(_first(fields.get("max_file_size_mb"), 0), 0)
-    max_bytes = min(max_mb, SINGLE_UPLOAD_MAX_MB) * 1024 * 1024
+    max_bytes = min(max_mb, MAX_UPLOAD_MB) * 1024 * 1024
     result.update(
         {
             "max_file_size_mb": max_mb,
@@ -136,8 +137,8 @@ def main(
         return _fail(result, "MAPPING_CHAT_MISMATCH", "上传前群映射与请求群不一致。")
     if not enabled:
         return _fail(result, "MAPPING_DISABLED", "上传前群归档映射已停用。")
-    if max_mb <= 0 or max_mb > SINGLE_UPLOAD_MAX_MB:
-        return _fail(result, "FILE_SIZE_CONFIG_INVALID", "群文件大小限制必须在 1..20 MB。")
+    if max_mb <= 0 or max_mb > MAX_UPLOAD_MB:
+        return _fail(result, "FILE_SIZE_CONFIG_INVALID", "群文件大小限制必须在 1..100 MB。")
     if selected_file_type not in allowed_types:
         return _fail(result, "FILE_TYPE_NOT_ALLOWED", "上传前文件类型已不在允许列表中。")
     if actual_size_int <= 0:

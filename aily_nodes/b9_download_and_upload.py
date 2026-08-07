@@ -4,13 +4,19 @@ v1 单节点实现：当前租户的官方连接器没有「下载消息附件�
 自定义连接器编辑器又不支持 multipart 文件字段，因此下载和上传合并为
 一个 Python 节点完成。文件全程为字节流，不经过文本序列化。
 
+上传策略：不超过 20 MB 走 upload_all 普通上传；超过 20 MB 自动切换
+upload_prepare / upload_part / upload_finish 分片上传。硬上限
+MAX_UPLOAD_BYTES = 100 MB——飞书消息资源下载接口本身的限制
+（错误码 234037），超过 100 MB 的消息文件无法通过 OpenAPI 下载。
+
 凭证使用约定（2026-08-07 用户确认）：真实 APP_ID / APP_SECRET 只填在
 Aily 画布的节点代码里；仓库中的本文件保持占位符，不得提交真实值。
 """
 
 import json
 import uuid
-from typing import Any, Dict, Tuple
+import zlib
+from typing import Any, Dict, List, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -21,7 +27,8 @@ APP_SECRET = ""
 
 API_BASE = "https://open.feishu.cn/open-apis"
 FILE_URL_PREFIX = "https://westoeast.feishu.cn/file/"
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+SINGLE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 
 def _base_result() -> Dict[str, Any]:
@@ -69,6 +76,82 @@ def _json(payload: bytes) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _post_json(
+    path: str, body_obj: Dict[str, Any], token: str
+) -> Tuple[int, Dict[str, Any], bytes]:
+    status, payload = _http(
+        f"{API_BASE}{path}",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        body=json.dumps(body_obj).encode("utf-8"),
+    )
+    return status, _json(payload), payload
+
+
+def _form_field(boundary: str, name: str, value: str) -> bytes:
+    return (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+        f"{value}\r\n"
+    ).encode("utf-8")
+
+
+def _form_file(boundary: str, file_name: str, content: bytes) -> bytes:
+    return (
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; '
+            f'filename="{file_name}"\r\n'
+            "Content-Type: application/octet-stream\r\n\r\n"
+        ).encode("utf-8")
+        + content
+        + b"\r\n"
+    )
+
+
+def _post_form(
+    path: str,
+    fields: List[Tuple[str, str]],
+    file_name: str,
+    content: bytes,
+    token: str,
+    timeout: int = 120,
+) -> Tuple[int, Dict[str, Any], bytes]:
+    boundary = "----AilyForm" + uuid.uuid4().hex
+    parts = [_form_field(boundary, name, value) for name, value in fields]
+    parts.append(_form_file(boundary, file_name, content))
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    status, payload = _http(
+        f"{API_BASE}{path}",
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        body=b"".join(parts),
+        timeout=timeout,
+    )
+    return status, _json(payload), payload
+
+
+def _extract_file_token(
+    status: int, data: Dict[str, Any], payload: bytes, stage: str
+) -> Tuple[str, str]:
+    if status != 200:
+        return "", f"{stage}失败：HTTP {status}，{payload[:200]!r}"
+    if not data:
+        return "", f"{stage}失败：响应无法解析，{payload[:200]!r}"
+    if data.get("code") != 0:
+        return "", f"{stage}失败：{data.get('msg') or payload[:200]!r}"
+    file_token = str((data.get("data") or {}).get("file_token") or "")
+    if not file_token:
+        return "", f"{stage}响应缺少 file_token：{payload[:200]!r}"
+    return file_token, ""
+
+
 def _tenant_token(app_id: str, app_secret: str) -> Tuple[str, str]:
     status, payload = _http(
         f"{API_BASE}/auth/v3/tenant_access_token/internal",
@@ -83,70 +166,103 @@ def _tenant_token(app_id: str, app_secret: str) -> Tuple[str, str]:
     return token, ""
 
 
-def _download(message_id: str, file_key: str, token: str) -> Tuple[bytes, str]:
+def _download(message_id: str, file_key: str, token: str) -> Tuple[bytes, str, str]:
     url = f"{API_BASE}/im/v1/messages/{message_id}/resources/{file_key}?type=file"
     status, payload = _http(url, headers={"Authorization": f"Bearer {token}"})
-    if status != 200:
-        return b"", f"下载消息文件失败：HTTP {status}，{payload[:200]!r}"
     data = _json(payload)
-    if isinstance(data.get("code"), int) and data["code"] != 0:
-        return b"", f"下载消息文件失败：{data.get('msg') or payload[:200]!r}"
-    return payload, ""
+    api_code = data.get("code")
+    if status != 200 or (isinstance(api_code, int) and api_code != 0):
+        if api_code == 234037:
+            return (
+                b"",
+                "FILE_TOO_LARGE",
+                "文件超过 100 MB：飞书消息资源下载接口的硬限制，"
+                "无法通过机器人归档，请直接上传到云盘目标目录。",
+            )
+        msg = data.get("msg") or payload[:200]
+        return b"", "DOWNLOAD_FAILED", f"下载消息文件失败：HTTP {status}，{msg}"
+    return payload, "", ""
+
+
+def _upload_all(
+    file_name: str, parent_node: str, content: bytes, token: str
+) -> Tuple[str, str]:
+    status, data, payload = _post_form(
+        "/drive/v1/files/upload_all",
+        [
+            ("file_name", file_name),
+            ("parent_type", "explorer"),
+            ("parent_node", parent_node),
+            ("size", str(len(content))),
+        ],
+        file_name,
+        content,
+        token,
+    )
+    return _extract_file_token(status, data, payload, "上传")
+
+
+def _upload_chunked(
+    file_name: str, parent_node: str, content: bytes, token: str
+) -> Tuple[str, str]:
+    size = len(content)
+    status, data, payload = _post_json(
+        "/drive/v1/files/upload_prepare",
+        {
+            "file_name": file_name,
+            "parent_type": "explorer",
+            "parent_node": parent_node,
+            "size": size,
+        },
+        token,
+    )
+    if status != 200 or data.get("code") != 0:
+        return "", (
+            f"分片预上传失败：HTTP {status}，{data.get('msg') or payload[:200]!r}"
+        )
+    prepare = data.get("data") or {}
+    upload_id = str(prepare.get("upload_id") or "")
+    block_size = int(prepare.get("block_size") or 0)
+    block_num = int(prepare.get("block_num") or 0)
+    if not upload_id or block_size <= 0 or block_num <= 0:
+        return "", f"分片预上传响应无效：{payload[:200]!r}"
+
+    for seq in range(block_num):
+        chunk = content[seq * block_size : (seq + 1) * block_size]
+        if not chunk:
+            break
+        status, data, payload = _post_form(
+            "/drive/v1/files/upload_part",
+            [
+                ("upload_id", upload_id),
+                ("seq", str(seq)),
+                ("size", str(len(chunk))),
+                ("checksum", str(zlib.adler32(chunk))),
+            ],
+            file_name,
+            chunk,
+            token,
+        )
+        if status != 200 or data.get("code") != 0:
+            return "", (
+                f"分片上传失败（第 {seq + 1}/{block_num} 片）：HTTP {status}，"
+                f"{data.get('msg') or payload[:200]!r}"
+            )
+
+    status, data, payload = _post_json(
+        "/drive/v1/files/upload_finish",
+        {"upload_id": upload_id, "block_num": block_num},
+        token,
+    )
+    return _extract_file_token(status, data, payload, "分片完成")
 
 
 def _upload(
-    file_name: str,
-    parent_node: str,
-    content: bytes,
-    token: str,
+    file_name: str, parent_node: str, content: bytes, token: str
 ) -> Tuple[str, str]:
-    boundary = "----AilyForm" + uuid.uuid4().hex
-
-    def _field(name: str, value: str) -> bytes:
-        return (
-            f"--{boundary}\r\n"
-            f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
-            f"{value}\r\n"
-        ).encode("utf-8")
-
-    body = b"".join(
-        [
-            _field("file_name", file_name),
-            _field("parent_type", "explorer"),
-            _field("parent_node", parent_node),
-            _field("size", str(len(content))),
-            (
-                f"--{boundary}\r\n"
-                f'Content-Disposition: form-data; name="file"; '
-                f'filename="{file_name}"\r\n'
-                "Content-Type: application/octet-stream\r\n\r\n"
-            ).encode("utf-8")
-            + content
-            + b"\r\n",
-            f"--{boundary}--\r\n".encode("utf-8"),
-        ]
-    )
-    status, payload = _http(
-        f"{API_BASE}/drive/v1/files/upload_all",
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-        body=body,
-        timeout=120,
-    )
-    data = _json(payload)
-    if status != 200:
-        return "", f"上传失败：HTTP {status}，{payload[:200]!r}"
-    if not data:
-        return "", f"上传失败：响应无法解析，{payload[:200]!r}"
-    if data.get("code") != 0:
-        return "", f"上传失败：{data.get('msg') or payload[:200]!r}"
-    file_token = str((data.get("data") or {}).get("file_token") or "")
-    if not file_token:
-        return "", f"上传响应缺少 file_token：{payload[:200]!r}"
-    return file_token, ""
+    if len(content) <= SINGLE_UPLOAD_MAX_BYTES:
+        return _upload_all(file_name, parent_node, content, token)
+    return _upload_chunked(file_name, parent_node, content, token)
 
 
 def main(
@@ -193,9 +309,9 @@ def main(
     if err:
         return _fail(result, "TOKEN_FAILED", err)
 
-    content, err = _download(message_id, file_key, token)
+    content, err_code, err = _download(message_id, file_key, token)
     if err:
-        return _fail(result, "DOWNLOAD_FAILED", err)
+        return _fail(result, err_code, err)
 
     size = len(content)
     result["actual_size"] = size
@@ -205,7 +321,8 @@ def main(
         return _fail(
             result,
             "FILE_TOO_LARGE",
-            "文件超过 20 MB 普通上传上限，请使用分片上传流程。",
+            "文件超过 "
+            f"{MAX_UPLOAD_BYTES // 1024 // 1024} MB 上传上限，请先拆分或压缩。",
         )
 
     file_token, err = _upload(file_name, parent_node, content, token)
