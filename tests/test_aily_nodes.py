@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest import mock
 
 from aily_nodes.a2_normalize_trigger_message import main as normalize_trigger
 from aily_nodes.a7_build_archive_request import main as build_request
@@ -11,6 +12,8 @@ from aily_nodes.b5_validate_processing_request import (
     main as validate_processing_request,
 )
 from aily_nodes.b6_validate_upload_policy import main as validate_upload_policy
+from aily_nodes.b8_compute_actual_size import main as compute_actual_size
+from aily_nodes.b9_download_and_upload import main as download_and_upload
 from aily_nodes.b_build_confirm_card import main as build_confirm_card
 from aily_nodes.b_build_folder_card import main as build_folder_card
 from aily_nodes.b_build_result_card import main as build_result_card
@@ -547,6 +550,22 @@ class SkillBNodeTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_code"], "FILE_EMPTY")
 
+    def test_download_size_counts_utf8_bytes(self):
+        self.assertEqual(compute_actual_size("abc")["actual_size"], 3)
+        self.assertEqual(compute_actual_size("中文")["actual_size"], 6)
+
+    def test_download_size_passes_zero_through_for_b17_to_reject(self):
+        result = compute_actual_size("")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["actual_size"], 0)
+
+    def test_download_size_flags_missing_content(self):
+        result = compute_actual_size(None)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "FILE_CONTENT_MISSING")
+
     def test_operator_must_be_original_requester(self):
         context = valid_request_context()
         result = validate_callback(
@@ -666,6 +685,103 @@ class SkillBNodeTests(unittest.TestCase):
             "项目归档 / A",
         )
         self.assertEqual(result["result_size_text"], "1.0 MB")
+
+
+class _FakeHttpResponse:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status = status
+
+    def read(self):
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class DownloadUploadNodeTests(unittest.TestCase):
+    def test_missing_credentials_fail_before_network(self):
+        result = download_and_upload("om_x", "file_key", "a.md", "fld_x")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "CREDENTIALS_MISSING")
+
+    def test_download_upload_success_returns_token_url_and_size(self):
+        content = b"%PDF-1.4 binary-bytes"
+        responses = [
+            _FakeHttpResponse(json.dumps({"tenant_access_token": "t-1"}).encode()),
+            _FakeHttpResponse(content),
+            _FakeHttpResponse(
+                json.dumps({"code": 0, "data": {"file_token": "ft_1"}}).encode()
+            ),
+        ]
+        with mock.patch(
+            "aily_nodes.b9_download_and_upload.urlopen",
+            side_effect=responses,
+        ):
+            result = download_and_upload(
+                "om_x",
+                "file_key",
+                "a.pdf",
+                "fld_x",
+                app_id="id",
+                app_secret="secret",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["file_token"], "ft_1")
+        self.assertEqual(result["actual_size"], len(content))
+        self.assertTrue(result["file_url"].endswith("ft_1"))
+
+    def test_download_api_error_is_reported_as_download_failed(self):
+        responses = [
+            _FakeHttpResponse(json.dumps({"tenant_access_token": "t-1"}).encode()),
+            _FakeHttpResponse(
+                json.dumps({"code": 234008, "msg": "no permission"}).encode()
+            ),
+        ]
+        with mock.patch(
+            "aily_nodes.b9_download_and_upload.urlopen",
+            side_effect=responses,
+        ):
+            result = download_and_upload(
+                "om_x",
+                "file_key",
+                "a.pdf",
+                "fld_x",
+                app_id="id",
+                app_secret="secret",
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "DOWNLOAD_FAILED")
+        self.assertIn("no permission", result["error"])
+
+    def test_oversize_content_is_rejected_before_upload(self):
+        big = b"a" * (20 * 1024 * 1024 + 1)
+        responses = [
+            _FakeHttpResponse(json.dumps({"tenant_access_token": "t-1"}).encode()),
+            _FakeHttpResponse(big),
+        ]
+        with mock.patch(
+            "aily_nodes.b9_download_and_upload.urlopen",
+            side_effect=responses,
+        ) as mocked:
+            result = download_and_upload(
+                "om_x",
+                "file_key",
+                "big.zip",
+                "fld_x",
+                app_id="id",
+                app_secret="secret",
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_code"], "FILE_TOO_LARGE")
+        self.assertEqual(mocked.call_count, 2)
 
 
 if __name__ == "__main__":

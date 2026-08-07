@@ -1532,6 +1532,8 @@ B3.1 只负责把 `confirm_upload` 和其他 6 个 action 分开；6 个非上�
 
 本步从 B3.1 的 `确认上传` 分支开始搭建，这是唯一不经过 B4 的 action。15.1–15.10 先搭主链，失败出口全部暂时悬空；15.11 统一搭建失败处理段并接线。
 
+> **版本说明（2026-08-07）**：v1 搭建精简主链：B12 → B13 → B14 → B15 → B18 → B19 → B20 → B21 → B22。**B15.5（计算文件大小）、B16（重查映射）、B17（上传策略校验，含 20 MB 上限）列为 v2 增补需求，v1 暂不搭建**；若上传节点要求填写文件大小，则保留 B15.5 一个节点。失败路径 v1 先用「更新 failed + 发送真实错误文本」，失败结果卡片（5 套）后补。16.3 的用例 10（文件大小）属于 v2 验收范围。
+
 ### 15.1 B12 锁定 processing
 
 1. 在 B3.1 的 `确认上传` 分支后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B12_进入处理中`。
@@ -1589,29 +1591,34 @@ B3.1 只负责把 `confirm_upload` 和其他 6 个 action 分开；6 个非上�
 12. 在 B14.2 建立第 2 个分支（否则分支），分支名填：`只发错误`。在该分支后面添加「发送消息」节点，内容绑定 `B14.error`，后面接「结束」节点。
 13. `可以上传` 分支接 15.4。
 
-### 15.4 B15 下载消息文件
+### 15.4 B15 下载并上传文件（Python 单节点）
 
-1. 在 `可以上传` 分支后面添加「获取消息资源」节点，节点名填：`B15_下载消息文件`。
-2. 参数按下表设置：
+当前租户官方连接器没有「下载消息附件」「上传文件」操作，自定义连接器编辑器又不支持 multipart 文件字段，因此 v1 把下载和上传合并为一个 Python 节点（2026-08-07 起，替代原连接器 B15 和第 15.7 节的 B18）。
 
-   | 参数 | 值 |
+1. 在 `可以上传` 分支后面添加 Python 代码节点，节点名填：`B15_下载并上传文件`。
+2. 完整复制 [b9_download_and_upload.py](./aily_nodes/b9_download_and_upload.py) 的全部内容，粘贴到代码编辑区。
+3. 在代码顶部的 `APP_ID`、`APP_SECRET` 两个常量中填入机器人应用的凭证（2026-08-07 用户确认接受凭证写在画布代码里；**只在画布填，仓库文件保持为空，不要把真实值提交到仓库**）。
+4. 输入参数按下表绑定：
+
+   | `main()` 参数 | 绑定 |
    |---|---|
-   | 消息 ID | 绑定：`B14.source_message_id` |
-   | 文件 key | 绑定：`B14.selected_file_key` |
-   | 资源类型 | 固定：`file` |
+   | `message_id` | `B14.source_message_id` |
+   | `file_key` | `B14.selected_file_key` |
+   | `file_name` | `B14.selected_file_name` |
+   | `parent_node` | `B14.target_folder_token` |
+   | `app_id` / `app_secret` | 留空（使用代码内常量） |
 
-3. 先单独调试该节点：打开 Base 归档请求表，复制一条测试请求的 `source_message_id` 和 `selected_file_key`，填入调试参数运行一次。
-4. 在调试输出中确认两个真实字段名：「文件内容」字段和「文件大小」字段。本手册后文写作 `B15.file_content` 和 `B15.actual_size`，实际绑定时选你界面里的真实字段名。
-5. B15 的失败出口暂时悬空，15.11 统一处理。
+5. 先调试一次该节点。成功输出：`ok = true`、`file_token` 非空、`file_url` 已拼接完成、`actual_size` 为真实字节数。该节点内置空文件和 20 MB 上限校验（`FILE_EMPTY` / `FILE_TOO_LARGE`），若报 `TOKEN_FAILED` 且是网络错误，说明代码节点不能联网，停止施工并排查。
+6. B15 的失败出口暂时悬空，15.11 统一处理。成功出口接 15.8 的 B19。
 
-### 15.5 B16 重查群映射
+### 15.5 B16 重查群映射（v2 增补，v1 跳过）
 
 1. 在 B15 的成功出口后面添加「查询多维表格记录」节点（群目录映射表，填 View ID），节点名填：`B16_重查群映射`。
 2. `page_size` 固定：`2`。
 3. 筛选条件：字段选 `chat_id`，operator 选 `is`，`value` 绑定：`B14.chat_id_filter_values`（整个数组，运行输入必须是 `"value":["oc_xxx"]`，不能是 `"value":"oc_xxx"`）。
 4. B16 的失败出口暂时悬空，15.11 统一处理。
 
-### 15.6 B17 校验上传策略
+### 15.6 B17 校验上传策略（v2 增补，v1 跳过）
 
 1. 在 B16 的成功出口后面添加 Python 代码节点，节点名填：`B17_校验上传策略`。
 2. 完整复制 [b6_validate_upload_policy.py](./aily_nodes/b6_validate_upload_policy.py) 的全部内容，粘贴到代码编辑区。
@@ -1622,7 +1629,7 @@ B3.1 只负责把 `confirm_upload` 和其他 6 个 action 分开；6 个非上�
    | `mapping_result` | `B16_重查群映射` 完整输出 |
    | `chat_id` | `B14.chat_id` |
    | `selected_file_type` | `B14.selected_file_type` |
-   | `actual_size` | `B15.actual_size`（15.4 第 4 步确认的真实大小字段） |
+   | `actual_size` | `B15.5_计算文件大小.actual_size` |
 
 4. 先调试一次该节点，让 Aily 自动识别返回字段。
 5. 在 B17 后面添加「条件分支」节点，节点名填：`B17.1_B17结果分支`。
@@ -1630,29 +1637,19 @@ B3.1 只负责把 `confirm_upload` 和其他 6 个 action 分开；6 个非上�
 7. 建立第 2 个分支，分支名填：`B17成功`。条件：左值绑定 `B17.ok`，运算符「等于」，右值布尔 `true`。
 8. `B17失败` 分支暂时悬空，15.11 统一处理。`B17成功` 分支接 15.7。
 
-### 15.7 B18 上传文件
+### 15.7 B18 上传文件（已并入 B15，无需搭建）
 
-1. 在 `B17成功` 分支后面添加「上传文件」节点，节点名填：`B18_上传文件`。
-2. 参数按下表设置：
-
-   | 参数 | 绑定 |
-   |---|---|
-   | 文件内容 | `B15.file_content`（15.4 第 4 步确认的真实内容字段） |
-   | 文件名 | `B14.selected_file_name` |
-   | 父目录 token | `B14.target_folder_token` |
-   | 文件大小 | `B17.actual_size` |
-
-3. B18 的失败出口暂时悬空，15.11 统一处理。
+v1 的下载和上传由 `B15_下载并上传文件`（b9_download_and_upload.py）一个节点完成，没有独立的 B18 节点。B15 的成功出口直接接 15.8 的 B19。
 
 ### 15.8 B19 转换结果链接
 
-1. 在 B18 的成功出口后面添加 Python 代码节点，节点名填：`B19_转换结果链接`。
+1. 在 B15 的成功出口后面添加 Python 代码节点，节点名填：`B19_转换结果链接`。
 2. 完整复制 [common_build_url_object.py](./aily_nodes/common_build_url_object.py) 的全部内容，粘贴到代码编辑区。
 3. 输入参数按下表绑定：
 
    | `main()` 参数 | 绑定 |
    |---|---|
-   | `url` | `B18_上传文件` 上传结果中的文件链接字段 |
+   | `url` | `B15_下载并上传文件.file_url` |
    | `text` | `B14.selected_file_name` |
 
 4. 先调试一次该节点，让 Aily 自动识别返回字段。
@@ -1670,9 +1667,9 @@ B3.1 只负责把 `confirm_upload` 和其他 6 个 action 分开；6 个非上�
    | Base 字段 | 值 |
    |---|---|
    | `status` | 固定：选单选值 `success` |
-   | `result_file_token` | 绑定：`B18_上传文件` 上传结果中的文件 token |
+   | `result_file_token` | 绑定：`B15_下载并上传文件.file_token` |
    | `result_file_url` | 绑定：`B19.url_object`（object，不是字符串 `B19.url`） |
-   | `result_size` | 绑定：`B17.actual_size` |
+   | `result_size` | 绑定：`B15_下载并上传文件.actual_size` |
    | `error_message` | 添加该字段，值留空 |
    | `completed_at` | 绑定：`B0.1_当前时间.now_ms` |
 
@@ -1702,7 +1699,7 @@ B3.1 只负责把 `confirm_upload` 和其他 6 个 action 分开；6 个非上�
    | `target_folder_path` | 绑定：`B14.target_folder_path` |
    | `target_folder_url` | 绑定：`B14.target_folder_url` |
    | `result_file_url` | 绑定：`B19.url`（字符串） |
-   | `result_size` | 绑定：`B17.actual_size` |
+   | `result_size` | 绑定：`B15_下载并上传文件.actual_size` |
    | `completed_at` | 绑定：`B0.1_当前时间.now_ms` |
    | `error_message` | 留空 |
 
@@ -1712,48 +1709,15 @@ B3.1 只负责把 `confirm_upload` 和其他 6 个 action 分开；6 个非上�
 7. 接收会话：接收类型选「群聊」，`chat_id` 绑定：`B14.chat_id`。
 8. B22 的失败出口直接接「结束」节点（Base 已写入终态，不再改单）。B22 的成功出口也接「结束」节点。
 
-### 15.11 搭建标准失败段并接线（共 5 套）
+### 15.11 搭建失败处理（v1 精简版）
 
-15.4–15.8 留下了 5 个失败出口。按以下步骤搭一套失败处理段，再复制成 5 套。
+v1 只剩两个失败出口要处理：B15（下载并上传）和 B19.1 的 `B19失败` 分支。每个失败出口各接三个节点：
 
-**第 1 步：搭建第一套（B15 下载失败）**
+1. 添加「更新多维表格记录」节点（归档请求表），节点名填：`B15失败_写入failed` / `B19失败_写入failed`。`record_id` 绑定 `B14.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定该节点的真实错误（`B15.error` 或 `B19.error`）；`completed_at` 绑定 `B0.1_当前时间.now_ms`（数字类型）。
+2. 后面添加「发送消息」节点，内容绑定同一个错误输出。
+3. 后面添加「结束」节点。
 
-1. 在 B15 的失败出口后面添加「更新多维表格记录」节点（归档请求表），节点名填：`B15失败_写入failed`。`record_id` 绑定 `B14.request_record_id`；`status` 固定选 `failed`；`error_message` 绑定 B15 的错误输出；`completed_at` 绑定 `B0.1_当前时间.now_ms`。
-2. 在 `B15失败_写入failed` 后面添加 Python 代码节点，节点名填：`B15失败_组装结果卡片`。完整复制 [b_build_result_card.py](./aily_nodes/b_build_result_card.py) 的全部内容。
-3. 输入参数按下表绑定：
-
-   | `main()` 参数 | 值 |
-   |---|---|
-   | `status` | 固定：`failed` |
-   | `request_id` | 绑定：`B14.request_id` |
-   | `requester_id` | 绑定：`B2.requester_id` |
-   | `selected_file_name` | 绑定：`B14.selected_file_name` |
-   | `selected_file_type` | 绑定：`B14.selected_file_type` |
-   | `target_folder_name` | 绑定：`B14.target_folder_name` |
-   | `target_folder_path` | 绑定：`B14.target_folder_path` |
-   | `target_folder_url` | 绑定：`B14.target_folder_url` |
-   | `result_file_url` | 留空 |
-   | `result_size` | 固定：`0` |
-   | `completed_at` | 绑定：`B0.1_当前时间.now_ms` |
-   | `error_message` | 绑定：B15 的错误输出 |
-
-4. 在该代码节点后面添加「发送飞书卡片」节点，节点名填：`B15失败_发送结果卡片`，卡片模板选：`归档-结果-V2`。卡片 14 个变量全部绑定 `B15失败_组装结果卡片` 的同名输出。接收会话：群聊，`chat_id` 绑定 `B14.chat_id`。
-5. 该发送节点的失败出口直接接「结束」节点；成功出口也接「结束」节点。
-
-**第 2 步：复制出其余 4 套**
-
-把第一套的三个节点整体复制 4 次，接到对应的失败出口，只改节点名和 `error_message` 的绑定来源，其余绑定不变：
-
-| 套 | 接到哪个失败出口 | 三个节点名 | `error_message` 绑定 |
-|---|---|---|---|
-| 2 | B16 失败出口 | `B16失败_写入failed` / `B16失败_组装结果卡片` / `B16失败_发送结果卡片` | B16 的错误输出 |
-| 3 | B17.1 的 `B17失败` 分支 | `B17失败_写入failed` / `B17失败_组装结果卡片` / `B17失败_发送结果卡片` | `B17.error` |
-| 4 | B18 失败出口 | `B18失败_写入failed` / `B18失败_组装结果卡片` / `B18失败_发送结果卡片` | B18 的错误输出 |
-| 5 | B19.1 的 `B19失败` 分支 | `B19失败_写入failed` / `B19失败_组装结果卡片` / `B19失败_发送结果卡片` | `B19.error` |
-
-**第 3 步：核对**
-
-5 套失败段的 `error_message` 必须各自绑定对应节点的真实错误，不能 5 套都绑同一个节点的错误。
+失败结果卡片（卡片 4 的失败版本）列为 v2 增补，v1 不做。
 
 ### 15.12 联调检查点：真实上传
 
@@ -1906,7 +1870,7 @@ completed_at 非空
 不能继续操作旧卡片
 ```
 
-#### 用例 10：文件大小
+#### 用例 10：文件大小（v2 验收项，v1 跳过）
 
 测试空文件、20 MB 内文件、超过 20 MB 文件。
 
@@ -1977,19 +1941,18 @@ B13_重查处理中请求
 B14 Python：b5_validate_processing_request.py
 B14.1 条件分支：校验失败 / 已经处理 / 可以上传
 B14.2 条件分支：可以落库 / 只发错误
-B15_下载消息文件
-B16_重查群映射
-B17 Python：b6_validate_upload_policy.py
-B17.1 条件分支：B17 成功 / 失败
-B18_上传文件
+B15_下载并上传文件（Python：b9_download_and_upload.py）
+B16_重查群映射（v2 增补）
+B17 Python：b6_validate_upload_policy.py（v2 增补）
+B17.1 条件分支（v2 增补）
 B19 Python：common_build_url_object.py
 B19.1 条件分支：B19 成功 / 失败
 B20_写回归档成功（更新记录）
 B21 Python：b_build_result_card.py（成功）
 B22_发送成功结果卡片（卡片 4）
-失败处理段（更新 failed → Python b_build_result_card.py → 卡片 4）：
-  B6 / B7 / B8 / B9 / B11 / 卡片3发送 / B13 / B14 的失败分支（仅落库 + 文本错误）
-  B15 / B16 / B17 / B18 / B19 的失败分支（落库 + 失败结果卡片）
+失败处理（更新 failed + 真实错误文本）：
+  B6 / B7 / B8 / B9 / B11 / 卡片3发送 / B13 / B14 的失败分支
+  B15 / B19 的失败分支（失败结果卡片为 v2 增补）
 ```
 
 ## 代码文件对应表
@@ -2004,6 +1967,8 @@ B22_发送成功结果卡片（卡片 4）
 | [b2_validate_callback.py](./aily_nodes/b2_validate_callback.py) | 技能 B：公共回调校验 |
 | [b3_prepare_action.py](./aily_nodes/b3_prepare_action.py) | 技能 B / B4：六个非上传 action 状态转换 |
 | [b5_validate_processing_request.py](./aily_nodes/b5_validate_processing_request.py) | 技能 B / B14：上传前重查并展开可信请求字段 |
+| [b8_compute_actual_size.py](./aily_nodes/b8_compute_actual_size.py) | 技能 B / B15.5：计算下载内容的真实字节数（v2 用，v1 已并入 b9） |
+| [b9_download_and_upload.py](./aily_nodes/b9_download_and_upload.py) | 技能 B / B15：下载消息资源并上传云盘（单节点，内置 20 MB 校验） |
 | [b6_validate_upload_policy.py](./aily_nodes/b6_validate_upload_policy.py) | 技能 B / B17：校验最新群映射、文件类型和真实字节数 |
 | [common_build_url_object.py](./aily_nodes/common_build_url_object.py) | 技能 B / B19：把 URL 字符串转换为 Base 超链接 object |
 | [b_build_folder_card.py](./aily_nodes/b_build_folder_card.py) | 技能 B：卡片 2 |

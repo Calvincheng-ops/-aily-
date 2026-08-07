@@ -609,6 +609,8 @@ actual_size <= min(max_file_size_mb, 20) * 1024 * 1024
 | `b_build_folder_card.py` | B7 | 校验目录清单、生成白名单和卡片 2 |
 | `b_build_confirm_card.py` | B11 | 生成卡片 3 |
 | `b5_validate_processing_request.py` | B14 | 上传前重查请求并展开可信字段 |
+| `b8_compute_actual_size.py` | B15.5 | 计算下载内容的真实字节数（v2 用） |
+| `b9_download_and_upload.py` | B15 | 下载消息资源并上传云盘（单节点，内置 20 MB 校验） |
 | `b6_validate_upload_policy.py` | B17 | 重查映射并校验文件类型、真实大小 |
 | `common_build_url_object.py` | B19 | 把上传结果 URL 转成 Base URL object |
 | `b_build_result_card.py` | 结果卡片代码节点 | 生成卡片 4 |
@@ -628,6 +630,10 @@ actual_size <= min(max_file_size_mb, 20) * 1024 * 1024
 | `FILE_TYPE_NOT_ALLOWED` | 映射没有该扩展名 | 修正 `allowed_file_types`，不要误报映射不存在 |
 | `INVALID_FOLDER_SELECTION` | token 不在本次白名单 | 检查卡片表单值和白名单保存顺序 |
 | `REQUEST_EXPIRED` | 当前毫秒超过 `expires_at` | 写入 `expired` 并提示重新发起 |
+| 自定义连接器把 `{param}` 字面值发出去 | 该编辑器不认识花括号占位 | 路径参数用冒号写法 `:param`，并在 Query 区声明同名参数使其成为节点入参（2026-08-06 验证） |
+| `234008 The app is not the resource sender` | 用 `/im/v1/files/:file_key` 下载用户发送的文件 | 该接口只能下载应用自己上传的文件；消息附件必须用 `/im/v1/messages/:message_id/resources/:file_key?type=file` |
+| `99992402 type is required`（下载消息资源） | 消息资源接口缺少 `type` query 参数 | Query 区保留 `type` 行，默认值 `file` |
+| 下载成功但没有文件大小字段 | 消息资源接口只返回 `code/data/message`，内容在 `data` | 大小用 `b8_compute_actual_size.py` 按 UTF-8 字节数计算（2026-08-06 验证） |
 
 ## 15. 已放弃的方案
 

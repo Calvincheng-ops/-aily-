@@ -200,6 +200,8 @@ expired
 | `b_build_folder_card.py` | B7 | 目录选项、目录白名单、卡片 2 回调 |
 | `b_build_confirm_card.py` | B11 | 卡片 3 变量和回调 |
 | `b5_validate_processing_request.py` | B14 | 上传所需可信字段 |
+| `b8_compute_actual_size.py` | B15.5 | 下载内容的真实字节数（v2 用） |
+| `b9_download_and_upload.py` | B15 | 下载消息资源并上传云盘（单节点） |
 | `b6_validate_upload_policy.py` | B17 | 实际大小和上传策略校验 |
 | `common_build_url_object.py` | B19 | `url_object` |
 | `b_build_result_card.py` | 结果节点 | 卡片 4 变量 |

@@ -24,6 +24,8 @@ aily_nodes/          # aILY Python 节点的本地备份代码
   b2_validate_callback.py          # 技能 B 自定义参数、状态和白名单校验
   b3_prepare_action.py             # 技能 B / B4：非上传 action 的状态转换与字段展平
   b5_validate_processing_request.py # 技能 B / B14：上传前重查请求
+  b8_compute_actual_size.py         # 技能 B / B15.5：计算下载内容的真实字节数（v2 用）
+  b9_download_and_upload.py         # 技能 B / B15：下载消息资源并上传云盘（单节点）
   b6_validate_upload_policy.py     # 技能 B / B17：上传策略与真实大小校验
   common_build_url_object.py       # 技能 B / B19：Base URL 字段 object 适配
   b_build_folder_card.py           # 技能 B：组装目录浏览卡片
@@ -36,13 +38,13 @@ tests/
 ## 红线
 
 - **不再使用服务端 Python 版本**（Docker + 事件回调）。旧代码已删除，新架构完全是 aILY 工作流。
-- App Secret / token 不得写入 Base、卡片变量或代码常量。
+- App Secret / token 不得写入 Base、卡片变量或仓库代码文件。例外：b9 节点的真实凭证允许只填在 Aily 画布的节点代码里（2026-08-07 用户确认），仓库中的 b9_download_and_upload.py 保持占位符，禁止提交真实值。
 - 技能 A 不得读取大量群聊历史或使用智能体猜文件；只按触发消息 `parent_id` 读取用户明确回复的文件。
 - 技能 A 使用上游变量生成卡片按钮的 `skill_input` 后结束；不要在发送卡片后顺序添加“工作流 B”节点，因为它会立即运行而不会等待点击。
 - 卡片回调是一次新的技能 B 运行，由按钮的 `trigger_skill` 启动，从系统全局变量和 B 开始节点自定义参数进入，状态通过 `request_id` 从多维表格恢复。
 - 即使只有 1 个文件，也必须先经过卡片 1 的用户确认；技能 A 不得提前写入选中文件。
 - 群聊只能访问映射表指定根目录及其子目录。
-- 上传前必须重新检查请求状态、20 MB 普通上传上限和目标目录边界；这是重复提交防护，不宣称 Base 普通更新具备原子幂等。
+- 上传前必须重新检查请求状态和目标目录边界；这是重复提交防护，不宣称 Base 普通更新具备原子幂等。（20 MB 上限的上传前校验已列为 v2 增补需求，v1 由上传节点自身报错兜底；见 BUILD_GUIDE_V2.md 第 15 步版本说明）
 - 错误分支必须展示当前节点真实 `error`，禁止把文件类型错误误报为“没有映射”。
 
 ## 关键外部资源
