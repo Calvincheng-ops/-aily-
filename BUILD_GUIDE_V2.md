@@ -525,7 +525,7 @@ skill_object_cancel    对象
 归档-结果-V2
 ```
 
-变量：
+保留老卡的全部变量：
 
 ```text
 is_success             布尔
@@ -550,15 +550,19 @@ initiator              人员
 {{result_title}}
 {{result_summary}}
 文件：{{selected_file_name}}
-目标目录：{{target_folder_path}}
+类型：{{selected_file_type}}
+完整路径：{{target_folder_path}}
+目录链接：{{target_folder_url}}
 文件链接：{{result_file_url}}
 文件大小：{{result_size_text}}
-完成时间：{{completed_at_text}}
+归档时间：{{completed_at_text}}
+发起人：{{initiator}}
 失败原因：{{error_message}}
-请求编号：{{request_id_text}}
 ```
 
-卡片 4 不放任何回调按钮。发布卡片。
+`completed_at_text` 必须绑定 `b_build_result_card.py` 的同名文本输出；该节点会把 `B0.1_当前时间.now_ms` 的毫秒时间戳转换为北京时间 `YYYY年MM月DD日 HH:mm:ss`。不要把 `now_ms` 直接绑定到卡片变量。
+
+卡片布局中，“完整路径”使用独占整行的 `target_folder_path`；“发起人”和“归档时间”使用同一行的两个等宽分栏。`request_id_text`、`target_folder_name` 等兼容变量可以继续保留并绑定，但不需要在正文展示。卡片 4 不放回调按钮。发布卡片。
 
 ---
 
@@ -1706,7 +1710,7 @@ v1 的下载和上传由 `B15_下载并上传文件`（b9_download_and_upload.py
 
 4. 先调试一次该节点，让 Aily 自动识别返回字段。
 5. 在 B21 后面添加「发送飞书卡片」节点，节点名填：`B22_发送成功结果卡片`，卡片模板选：`归档-结果-V2`。
-6. 卡片 14 个变量全部绑定 B21 的同名输出：`is_success`、`result_title`、`result_summary`、`request_id_text`、`selected_file_name`、`selected_file_type`、`target_folder_name`、`target_folder_path`、`target_folder_url`、`result_file_url`、`result_size_text`、`completed_at_text`、`error_message`、`initiator`。
+6. 老卡 14 个变量继续全部绑定 B21 的同名输出：`is_success`、`result_title`、`result_summary`、`request_id_text`、`selected_file_name`、`selected_file_type`、`target_folder_name`、`target_folder_path`、`target_folder_url`、`result_file_url`、`result_size_text`、`completed_at_text`、`error_message`、`initiator`。其中正文的完整路径必须使用 `target_folder_path`，展示顺序为“根目录 / 子目录 / … / 最终目录”，不得改用只含末级名称的 `target_folder_name`；`request_id_text` 可保留绑定但不展示；`completed_at_text` 必须使用 B21 已格式化的文本，不能直接绑定 `B0.1.now_ms`。
 7. 接收会话：接收类型选「群聊」，`chat_id` 绑定：`B14.chat_id`。
 8. B22 的失败出口直接接「结束」节点（Base 已写入终态，不再改单）。B22 的成功出口也接「结束」节点。
 

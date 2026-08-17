@@ -1,6 +1,7 @@
 """Aily Skill B node: normalize upload outcome into Card 4 variables."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 
@@ -36,6 +37,27 @@ def _path_text(value: Any) -> str:
         for item in path
         if isinstance(item, dict)
     )
+
+
+def _completed_at_text(value: Any) -> str:
+    """Format Aily's Unix timestamp as readable China Standard Time."""
+    if value is None or value == "":
+        return ""
+    text = str(value).strip()
+    try:
+        timestamp = float(text)
+    except (TypeError, ValueError):
+        return text
+    if abs(timestamp) >= 100_000_000_000:
+        timestamp /= 1000
+    try:
+        completed_at = datetime.fromtimestamp(
+            timestamp,
+            tz=timezone(timedelta(hours=8)),
+        )
+    except (OverflowError, OSError, ValueError):
+        return text
+    return completed_at.strftime("%Y年%m月%d日 %H:%M:%S")
 
 
 def _result(error: str = "", error_code: str = "") -> Dict[str, Any]:
@@ -112,7 +134,7 @@ def main(
         "target_folder_url": str(target_folder_url or "").strip(),
         "result_file_url": str(result_file_url or "").strip() if is_success else "",
         "result_size_text": _size_text(result_size) if is_success else "-",
-        "completed_at_text": str(completed_at or "").strip(),
+        "completed_at_text": _completed_at_text(completed_at),
         "error_message": "" if is_success else readable_error,
         "initiator": (
             {"id": str(requester_id).strip()} if str(requester_id or "").strip() else {}

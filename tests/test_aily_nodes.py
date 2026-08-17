@@ -533,6 +533,34 @@ class SkillBNodeTests(unittest.TestCase):
         self.assertEqual(result["target_folder_token"], "root_demo")
         self.assertEqual(result["target_folder_path"], "项目归档")
 
+    def test_processing_request_path_starts_at_bound_root(self):
+        context = valid_request_context()
+        full_path = [
+            {"token": "root_demo", "name": "项目归档"},
+            {"token": "customer_a", "name": "客户A"},
+            {"token": "year_2026", "name": "2026"},
+            {"token": "contracts", "name": "合同"},
+        ]
+        payload = self._request_payload(
+            context,
+            status="processing",
+            source_message_id=FILE_MESSAGE_ID,
+            selected_file_key="file_key_demo",
+            selected_file_name="项目终版.md",
+            selected_file_type="md",
+            target_folder_token="contracts",
+            target_folder_name="合同",
+            target_folder_url={"text": "合同", "link": "https://example/contracts"},
+            folder_path_json=json.dumps(full_path, ensure_ascii=False),
+        )
+        result = validate_processing_request(payload, context["request_id"])
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            result["target_folder_path"],
+            "项目归档 / 客户A / 2026 / 合同",
+        )
+
     def test_processing_request_validator_stops_terminal_request(self):
         context = valid_request_context()
         payload = self._request_payload(context, status="success")
@@ -700,6 +728,24 @@ class SkillBNodeTests(unittest.TestCase):
             "项目归档 / A",
         )
         self.assertEqual(result["result_size_text"], "1.0 MB")
+        self.assertEqual(result["completed_at_text"], "2026-07-27 10:00")
+        timestamp_result = build_result_card(
+            "success",
+            "archive_demo",
+            USER_ID,
+            "项目终版.md",
+            "md",
+            "A",
+            "项目归档 / A",
+            "https://example/a",
+            "https://example/a/file",
+            1024,
+            1785117600000,
+        )
+        self.assertEqual(
+            timestamp_result["completed_at_text"],
+            "2026年07月27日 10:00:00",
+        )
 
 
 class _FakeHttpResponse:
